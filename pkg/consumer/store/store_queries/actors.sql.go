@@ -214,6 +214,19 @@ func (q *Queries) GetActorTypeAhead(ctx context.Context, arg GetActorTypeAheadPa
 	return items, nil
 }
 
+const getActorUIDByDID = `-- name: GetActorUIDByDID :one
+SELECT id
+FROM actors
+WHERE did = $1
+`
+
+func (q *Queries) GetActorUIDByDID(ctx context.Context, did string) (sql.NullInt64, error) {
+	row := q.queryRow(ctx, q.getActorUIDByDIDStmt, getActorUIDByDID, did)
+	var id sql.NullInt64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getActorsByIDs = `-- name: GetActorsByIDs :many
 SELECT did, handle, display_name, bio, handle_valid, last_validated, pro_pic_cid, banner_cid, created_at, updated_at, inserted_at, id
 FROM actors

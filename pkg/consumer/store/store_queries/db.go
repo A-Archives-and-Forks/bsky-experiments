@@ -204,9 +204,6 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.findActorsByHandleStmt, err = db.PrepareContext(ctx, findActorsByHandle); err != nil {
 		return nil, fmt.Errorf("error preparing query FindActorsByHandle: %w", err)
 	}
-	if q.findPotentialFriendsStmt, err = db.PrepareContext(ctx, findPotentialFriends); err != nil {
-		return nil, fmt.Errorf("error preparing query FindPotentialFriends: %w", err)
-	}
 	if q.getActiveEventsForInitiatorStmt, err = db.PrepareContext(ctx, getActiveEventsForInitiator); err != nil {
 		return nil, fmt.Errorf("error preparing query GetActiveEventsForInitiator: %w", err)
 	}
@@ -224,6 +221,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	}
 	if q.getActorTypeAheadStmt, err = db.PrepareContext(ctx, getActorTypeAhead); err != nil {
 		return nil, fmt.Errorf("error preparing query GetActorTypeAhead: %w", err)
+	}
+	if q.getActorUIDByDIDStmt, err = db.PrepareContext(ctx, getActorUIDByDID); err != nil {
+		return nil, fmt.Errorf("error preparing query GetActorUIDByDID: %w", err)
 	}
 	if q.getActorsByIDsStmt, err = db.PrepareContext(ctx, getActorsByIDs); err != nil {
 		return nil, fmt.Errorf("error preparing query GetActorsByIDs: %w", err)
@@ -314,18 +314,6 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	}
 	if q.getLikeCountStmt, err = db.PrepareContext(ctx, getLikeCount); err != nil {
 		return nil, fmt.Errorf("error preparing query GetLikeCount: %w", err)
-	}
-	if q.getLikesByActorStmt, err = db.PrepareContext(ctx, getLikesByActor); err != nil {
-		return nil, fmt.Errorf("error preparing query GetLikesByActor: %w", err)
-	}
-	if q.getLikesBySubjectStmt, err = db.PrepareContext(ctx, getLikesBySubject); err != nil {
-		return nil, fmt.Errorf("error preparing query GetLikesBySubject: %w", err)
-	}
-	if q.getLikesGivenByActorFromToStmt, err = db.PrepareContext(ctx, getLikesGivenByActorFromTo); err != nil {
-		return nil, fmt.Errorf("error preparing query GetLikesGivenByActorFromTo: %w", err)
-	}
-	if q.getLikesReceivedByActorFromActorStmt, err = db.PrepareContext(ctx, getLikesReceivedByActorFromActor); err != nil {
-		return nil, fmt.Errorf("error preparing query GetLikesReceivedByActorFromActor: %w", err)
 	}
 	if q.getMPLSStmt, err = db.PrepareContext(ctx, getMPLS); err != nil {
 		return nil, fmt.Errorf("error preparing query GetMPLS: %w", err)
@@ -438,12 +426,6 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.getTopUsersByPointsStmt, err = db.PrepareContext(ctx, getTopUsersByPoints); err != nil {
 		return nil, fmt.Errorf("error preparing query GetTopUsersByPoints: %w", err)
 	}
-	if q.getTotalLikesGivenByActorStmt, err = db.PrepareContext(ctx, getTotalLikesGivenByActor); err != nil {
-		return nil, fmt.Errorf("error preparing query GetTotalLikesGivenByActor: %w", err)
-	}
-	if q.getTotalLikesReceivedByActorStmt, err = db.PrepareContext(ctx, getTotalLikesReceivedByActor); err != nil {
-		return nil, fmt.Errorf("error preparing query GetTotalLikesReceivedByActor: %w", err)
-	}
 	if q.getTotalPointsForActorStmt, err = db.PrepareContext(ctx, getTotalPointsForActor); err != nil {
 		return nil, fmt.Errorf("error preparing query GetTotalPointsForActor: %w", err)
 	}
@@ -470,9 +452,6 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	}
 	if q.insertFollowerOutliersStmt, err = db.PrepareContext(ctx, insertFollowerOutliers); err != nil {
 		return nil, fmt.Errorf("error preparing query InsertFollowerOutliers: %w", err)
-	}
-	if q.insertLikeStmt, err = db.PrepareContext(ctx, insertLike); err != nil {
-		return nil, fmt.Errorf("error preparing query InsertLike: %w", err)
 	}
 	if q.insertLikeOutliersStmt, err = db.PrepareContext(ctx, insertLikeOutliers); err != nil {
 		return nil, fmt.Errorf("error preparing query InsertLikeOutliers: %w", err)
@@ -851,11 +830,6 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing findActorsByHandleStmt: %w", cerr)
 		}
 	}
-	if q.findPotentialFriendsStmt != nil {
-		if cerr := q.findPotentialFriendsStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing findPotentialFriendsStmt: %w", cerr)
-		}
-	}
 	if q.getActiveEventsForInitiatorStmt != nil {
 		if cerr := q.getActiveEventsForInitiatorStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getActiveEventsForInitiatorStmt: %w", cerr)
@@ -884,6 +858,11 @@ func (q *Queries) Close() error {
 	if q.getActorTypeAheadStmt != nil {
 		if cerr := q.getActorTypeAheadStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getActorTypeAheadStmt: %w", cerr)
+		}
+	}
+	if q.getActorUIDByDIDStmt != nil {
+		if cerr := q.getActorUIDByDIDStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing getActorUIDByDIDStmt: %w", cerr)
 		}
 	}
 	if q.getActorsByIDsStmt != nil {
@@ -1034,26 +1013,6 @@ func (q *Queries) Close() error {
 	if q.getLikeCountStmt != nil {
 		if cerr := q.getLikeCountStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getLikeCountStmt: %w", cerr)
-		}
-	}
-	if q.getLikesByActorStmt != nil {
-		if cerr := q.getLikesByActorStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing getLikesByActorStmt: %w", cerr)
-		}
-	}
-	if q.getLikesBySubjectStmt != nil {
-		if cerr := q.getLikesBySubjectStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing getLikesBySubjectStmt: %w", cerr)
-		}
-	}
-	if q.getLikesGivenByActorFromToStmt != nil {
-		if cerr := q.getLikesGivenByActorFromToStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing getLikesGivenByActorFromToStmt: %w", cerr)
-		}
-	}
-	if q.getLikesReceivedByActorFromActorStmt != nil {
-		if cerr := q.getLikesReceivedByActorFromActorStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing getLikesReceivedByActorFromActorStmt: %w", cerr)
 		}
 	}
 	if q.getMPLSStmt != nil {
@@ -1241,16 +1200,6 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing getTopUsersByPointsStmt: %w", cerr)
 		}
 	}
-	if q.getTotalLikesGivenByActorStmt != nil {
-		if cerr := q.getTotalLikesGivenByActorStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing getTotalLikesGivenByActorStmt: %w", cerr)
-		}
-	}
-	if q.getTotalLikesReceivedByActorStmt != nil {
-		if cerr := q.getTotalLikesReceivedByActorStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing getTotalLikesReceivedByActorStmt: %w", cerr)
-		}
-	}
 	if q.getTotalPointsForActorStmt != nil {
 		if cerr := q.getTotalPointsForActorStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getTotalPointsForActorStmt: %w", cerr)
@@ -1294,11 +1243,6 @@ func (q *Queries) Close() error {
 	if q.insertFollowerOutliersStmt != nil {
 		if cerr := q.insertFollowerOutliersStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing insertFollowerOutliersStmt: %w", cerr)
-		}
-	}
-	if q.insertLikeStmt != nil {
-		if cerr := q.insertLikeStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing insertLikeStmt: %w", cerr)
 		}
 	}
 	if q.insertLikeOutliersStmt != nil {
@@ -1520,13 +1464,13 @@ type Queries struct {
 	dequeueImagesStmt                         *sql.Stmt
 	enqueueImageStmt                          *sql.Stmt
 	findActorsByHandleStmt                    *sql.Stmt
-	findPotentialFriendsStmt                  *sql.Stmt
 	getActiveEventsForInitiatorStmt           *sql.Stmt
 	getActiveEventsForTargetStmt              *sql.Stmt
 	getActorByDIDStmt                         *sql.Stmt
 	getActorByHandleStmt                      *sql.Stmt
 	getActorByIDStmt                          *sql.Stmt
 	getActorTypeAheadStmt                     *sql.Stmt
+	getActorUIDByDIDStmt                      *sql.Stmt
 	getActorsByIDsStmt                        *sql.Stmt
 	getActorsForValidationStmt                *sql.Stmt
 	getActorsWithoutPropicStmt                *sql.Stmt
@@ -1557,10 +1501,6 @@ type Queries struct {
 	getKeyStmt                                *sql.Stmt
 	getLikeStmt                               *sql.Stmt
 	getLikeCountStmt                          *sql.Stmt
-	getLikesByActorStmt                       *sql.Stmt
-	getLikesBySubjectStmt                     *sql.Stmt
-	getLikesGivenByActorFromToStmt            *sql.Stmt
-	getLikesReceivedByActorFromActorStmt      *sql.Stmt
 	getMPLSStmt                               *sql.Stmt
 	getMyPostsByFuzzyContentStmt              *sql.Stmt
 	getPinStmt                                *sql.Stmt
@@ -1598,8 +1538,6 @@ type Queries struct {
 	getTopPostsForActorStmt                   *sql.Stmt
 	getTopPostsInWindowStmt                   *sql.Stmt
 	getTopUsersByPointsStmt                   *sql.Stmt
-	getTotalLikesGivenByActorStmt             *sql.Stmt
-	getTotalLikesReceivedByActorStmt          *sql.Stmt
 	getTotalPointsForActorStmt                *sql.Stmt
 	getTotalPointsForEventStmt                *sql.Stmt
 	getUnconfirmedEventStmt                   *sql.Stmt
@@ -1609,7 +1547,6 @@ type Queries struct {
 	incrementLikeCountByNWithSubjectStmt      *sql.Stmt
 	incrementRepostCountByNStmt               *sql.Stmt
 	insertFollowerOutliersStmt                *sql.Stmt
-	insertLikeStmt                            *sql.Stmt
 	insertLikeOutliersStmt                    *sql.Stmt
 	insertOperationOutliersStmt               *sql.Stmt
 	listActorLabelsStmt                       *sql.Stmt
@@ -1700,13 +1637,13 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		dequeueImagesStmt:                         q.dequeueImagesStmt,
 		enqueueImageStmt:                          q.enqueueImageStmt,
 		findActorsByHandleStmt:                    q.findActorsByHandleStmt,
-		findPotentialFriendsStmt:                  q.findPotentialFriendsStmt,
 		getActiveEventsForInitiatorStmt:           q.getActiveEventsForInitiatorStmt,
 		getActiveEventsForTargetStmt:              q.getActiveEventsForTargetStmt,
 		getActorByDIDStmt:                         q.getActorByDIDStmt,
 		getActorByHandleStmt:                      q.getActorByHandleStmt,
 		getActorByIDStmt:                          q.getActorByIDStmt,
 		getActorTypeAheadStmt:                     q.getActorTypeAheadStmt,
+		getActorUIDByDIDStmt:                      q.getActorUIDByDIDStmt,
 		getActorsByIDsStmt:                        q.getActorsByIDsStmt,
 		getActorsForValidationStmt:                q.getActorsForValidationStmt,
 		getActorsWithoutPropicStmt:                q.getActorsWithoutPropicStmt,
@@ -1737,10 +1674,6 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		getKeyStmt:                                q.getKeyStmt,
 		getLikeStmt:                               q.getLikeStmt,
 		getLikeCountStmt:                          q.getLikeCountStmt,
-		getLikesByActorStmt:                       q.getLikesByActorStmt,
-		getLikesBySubjectStmt:                     q.getLikesBySubjectStmt,
-		getLikesGivenByActorFromToStmt:            q.getLikesGivenByActorFromToStmt,
-		getLikesReceivedByActorFromActorStmt:      q.getLikesReceivedByActorFromActorStmt,
 		getMPLSStmt:                               q.getMPLSStmt,
 		getMyPostsByFuzzyContentStmt:              q.getMyPostsByFuzzyContentStmt,
 		getPinStmt:                                q.getPinStmt,
@@ -1778,8 +1711,6 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		getTopPostsForActorStmt:                   q.getTopPostsForActorStmt,
 		getTopPostsInWindowStmt:                   q.getTopPostsInWindowStmt,
 		getTopUsersByPointsStmt:                   q.getTopUsersByPointsStmt,
-		getTotalLikesGivenByActorStmt:             q.getTotalLikesGivenByActorStmt,
-		getTotalLikesReceivedByActorStmt:          q.getTotalLikesReceivedByActorStmt,
 		getTotalPointsForActorStmt:                q.getTotalPointsForActorStmt,
 		getTotalPointsForEventStmt:                q.getTotalPointsForEventStmt,
 		getUnconfirmedEventStmt:                   q.getUnconfirmedEventStmt,
@@ -1789,7 +1720,6 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		incrementLikeCountByNWithSubjectStmt:      q.incrementLikeCountByNWithSubjectStmt,
 		incrementRepostCountByNStmt:               q.incrementRepostCountByNStmt,
 		insertFollowerOutliersStmt:                q.insertFollowerOutliersStmt,
-		insertLikeStmt:                            q.insertLikeStmt,
 		insertLikeOutliersStmt:                    q.insertLikeOutliersStmt,
 		insertOperationOutliersStmt:               q.insertOperationOutliersStmt,
 		listActorLabelsStmt:                       q.listActorLabelsStmt,

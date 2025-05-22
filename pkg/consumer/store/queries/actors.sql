@@ -114,3 +114,7 @@ WHERE id = $1;
 SELECT *
 FROM actors
 WHERE id = ANY($1);
+-- name: GetActorUIDByDID :one
+SELECT id
+FROM actors
+WHERE did = $1;

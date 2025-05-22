@@ -660,9 +660,38 @@ func (c *Consumer) OnCommit(ctx context.Context, evt *models.Event) error {
 	span.SetAttributes(attribute.String("rkey", evt.Commit.RKey))
 	span.SetAttributes(attribute.Int64("seq", evt.TimeUS))
 	span.SetAttributes(attribute.String("event_kind", evt.Commit.Operation))
+
+	// Get the actor from the DB
+	actorUID, err := c.Store.Queries.GetActorUIDByDID(ctx, evt.Did)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Warn("actor not found in DB, inserting new actor")
+			upsertParams := store_queries.UpsertActorFromFirehoseParams{
+				Did:       evt.Did,
+				Handle:    "",
+				UpdatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+				CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+			}
+			err = c.Store.Queries.UpsertActorFromFirehose(ctx, upsertParams)
+			if err != nil {
+				log.Errorf("failed to upsert actor from firehose: %+v", err)
+				return fmt.Errorf("failed to upsert actor from firehose: %+v", err)
+			}
+
+			// Fetch the newly inserted actor
+			actorUID, err = c.Store.Queries.GetActorUIDByDID(ctx, evt.Did)
+			if err != nil {
+				log.Errorf("failed to get actor from DB after upsert: %+v", err)
+				return fmt.Errorf("failed to get actor from DB after upsert: %+v", err)
+			}
+		}
+		log.Errorf("failed to get actor from DB: %+v", err)
+		return fmt.Errorf("failed to get actor from DB: %+v", err)
+	}
+
 	switch evt.Commit.Operation {
 	case models.CommitOperationCreate:
-		recCreatedAt, err := c.HandleCreateRecord(ctx, evt.Did, evt.Commit.Collection, evt.Commit.RKey, evt.Commit.Record)
+		recCreatedAt, err := c.HandleCreateRecord(ctx, actorUID.Int64, evt.Did, evt.Commit.Collection, evt.Commit.RKey, evt.Commit.Record)
 		if err != nil {
 			log.Errorf("failed to handle create record: %+v", err)
 		}
@@ -715,7 +744,7 @@ func (c *Consumer) OnCommit(ctx context.Context, evt *models.Event) error {
 			}
 		}
 	case models.CommitOperationDelete:
-		err := c.HandleDeleteRecord(ctx, evt.Did, evt.Commit.Collection, evt.Commit.RKey)
+		err := c.HandleDeleteRecord(ctx, actorUID.Int64, evt.Did, evt.Commit.Collection, evt.Commit.RKey)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				log.Warn("record not found, so we can't delete it")
@@ -733,6 +762,7 @@ func (c *Consumer) OnCommit(ctx context.Context, evt *models.Event) error {
 // HandleDeleteRecord handles a delete record event from the firehose
 func (c *Consumer) HandleDeleteRecord(
 	ctx context.Context,
+	actorID int64,
 	repo string,
 	collection string,
 	rkey string,
@@ -750,7 +780,7 @@ func (c *Consumer) HandleDeleteRecord(
 		span.SetAttributes(attribute.String("record_type", "feed_like"))
 		// Get the like from the database to get the subject
 		like, err := c.Store.Queries.GetLike(ctx, store_queries.GetLikeParams{
-			ActorDid: repo,
+			ActorUid: actorID,
 			Rkey:     rkey,
 		})
 		if err != nil {
@@ -762,7 +792,7 @@ func (c *Consumer) HandleDeleteRecord(
 
 		// Delete the like from the database
 		err = c.Store.Queries.DeleteLike(ctx, store_queries.DeleteLikeParams{
-			ActorDid: repo,
+			ActorUid: actorID,
 			Rkey:     rkey,
 		})
 		if err != nil {
@@ -885,6 +915,7 @@ func (c *Consumer) HandleDeleteRecord(
 // HandleCreateRecord handles a create record event from the firehose
 func (c *Consumer) HandleCreateRecord(
 	ctx context.Context,
+	actorID int64,
 	repo string,
 	collection string,
 	rkey string,
@@ -940,7 +971,7 @@ func (c *Consumer) HandleCreateRecord(
 
 		// Check if we've already processed this record
 		_, err = c.Store.Queries.GetLike(ctx, store_queries.GetLikeParams{
-			ActorDid: repo,
+			ActorUid: actorID,
 			Rkey:     rkey,
 		})
 		if err != nil {
@@ -997,7 +1028,7 @@ func (c *Consumer) HandleCreateRecord(
 		}
 
 		err = c.Store.Queries.CreateLike(ctx, store_queries.CreateLikeParams{
-			ActorDid:  repo,
+			ActorUid:  actorID,
 			Rkey:      rkey,
 			Subj:      subj,
 			CreatedAt: sql.NullTime{Time: recCreatedAt, Valid: true},

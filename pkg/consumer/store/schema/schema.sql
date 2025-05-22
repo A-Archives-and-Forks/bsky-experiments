@@ -117,15 +117,14 @@ CREATE INDEX idx_repost_counts_num_reposts_gt_10 ON repost_counts (subject_id)
 WHERE num_reposts > 10;
 -- Likes
 CREATE TABLE likes (
-    actor_did TEXT NOT NULL,
+    actor_uid BIGINT NOT NULL,
     rkey TEXT NOT NULL,
     subj BIGINT NOT NULL,
     created_at TIMESTAMPTZ,
     inserted_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    PRIMARY KEY (actor_did, rkey)
+    PRIMARY KEY (actor_uid, rkey)
 );
-create index likes_created_at on likes (created_at desc);
-CREATE INDEX likes_subject ON likes (subj);
+CREATE INDEX likes_created_at ON likes (created_at DESC);
 -- Like Counts
 CREATE TABLE like_counts (
     subject_id BIGINT NOT NULL,

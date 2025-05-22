@@ -57,7 +57,7 @@ WITH stats AS (
         ) AS likes_per_day
         FULL OUTER JOIN (
             SELECT date_trunc('day', created_at) AS date,
-                COUNT(DISTINCT likes.actor_did) AS daily_active_likers
+                COUNT(DISTINCT likes.actor_uid) AS daily_active_likers
             FROM likes
             WHERE created_at > date_trunc(
                     'day',

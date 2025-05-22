@@ -146,7 +146,7 @@ type ImagesToProcess struct {
 }
 
 type Like struct {
-	ActorDid   string       `json:"actor_did"`
+	ActorUid   int64        `json:"actor_uid"`
 	Rkey       string       `json:"rkey"`
 	Subj       int64        `json:"subj"`
 	CreatedAt  sql.NullTime `json:"created_at"`
