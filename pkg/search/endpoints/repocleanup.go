@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/araddon/dateparse"
 	comatproto "github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
+	"github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/repo"
 	"github.com/bluesky-social/indigo/xrpc"
@@ -56,7 +58,6 @@ func (api *API) CleanupOldRecords(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, res)
-	return
 }
 
 func (api *API) GetCleanupStatus(c *gin.Context) {
@@ -99,7 +100,6 @@ func (api *API) GetCleanupStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusBadRequest, gin.H{"error": "must specify either job_id or did in query params"})
-	return
 }
 
 func (api *API) GetCleanupStats(c *gin.Context) {
@@ -165,7 +165,6 @@ func (api *API) CancelCleanupJob(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "job cancelled"})
-	return
 }
 
 type cleanupInfo struct {
@@ -178,13 +177,37 @@ type cleanupInfo struct {
 func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequest) (*cleanupInfo, error) {
 	log := slog.With("source", "cleanup_old_records_handler")
 
+	// If the request has a DID or Handle as an identifier, resolve it to a DID Doc
+	var ident *identity.Identity
+
+	atID, err := syntax.ParseAtIdentifier(req.Identifier)
+	if err == nil && atID != nil {
+		ident, err = api.Directory.Lookup(ctx, *atID)
+		if err != nil {
+			log.Error("Error looking up identity", "error", err)
+			return nil, fmt.Errorf("error looking up identity: %w", err)
+		}
+	} else if emailAddr, err := mail.ParseAddress(req.Identifier); err == nil && emailAddr != nil {
+		// Identifier is a valid email address
+	} else {
+		log.Error("Failed to parse identifier as at-identifier or email address", "identifier", req.Identifier, "error", err)
+		return nil, fmt.Errorf("failed to parse identifier as at-identifier or email address: %w", err)
+	}
+
+	pdsHost := "https://bsky.social"
+	if ident != nil &&
+		ident.PDSEndpoint() != "" &&
+		!strings.HasSuffix(ident.PDSEndpoint(), ".host.bsky.network") {
+		pdsHost = ident.PDSEndpoint()
+	}
+
 	// Create a new client
 	client := xrpc.Client{
 		Client: &http.Client{
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 			Timeout:   5 * time.Minute,
 		},
-		Host:      "https://bsky.social",
+		Host:      pdsHost,
 		UserAgent: &cleanupUserAgent,
 	}
 
@@ -236,10 +259,12 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 		return nil, fmt.Errorf("error parsing DID: %w", err)
 	}
 
-	ident, err := api.Directory.LookupDID(ctx, did)
-	if err != nil {
-		log.Error("Error looking up DID", "error", err)
-		return nil, fmt.Errorf("error looking up DID: %w", err)
+	if ident == nil {
+		ident, err = api.Directory.LookupDID(ctx, did)
+		if err != nil {
+			log.Error("Error looking up DID", "error", err)
+			return nil, fmt.Errorf("error looking up DID: %w", err)
+		}
 	}
 
 	client.Host = ident.PDSEndpoint()
@@ -423,7 +448,11 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 		for i := range jobsToRun {
 			job := jobsToRun[i]
 			wg.Add(1)
-			sem.Acquire(ctx, 1)
+			if err := sem.Acquire(ctx, 1); err != nil {
+				log.Error("Error acquiring semaphore", "error", err)
+				wg.Done()
+				continue
+			}
 			go func(job store_queries.RepoCleanupJob) {
 				defer func() {
 					sem.Release(1)
@@ -508,7 +537,7 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store_queries.RepoClea
 	}
 
 	// Talk directly to the user's PDS if the PDS isn't hosted by bsky
-	if !strings.HasSuffix(ident.PDSEndpoint(), ".bsky.network") {
+	if !strings.HasSuffix(ident.PDSEndpoint(), ".host.bsky.network") {
 		client.Host = ident.PDSEndpoint()
 	}
 
@@ -678,7 +707,11 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store_queries.RepoClea
 
 	limiter := rate.NewLimiter(rate.Limit(4), 1)
 	for _, batch := range deleteBatches {
-		limiter.Wait(ctx)
+		if err := limiter.Wait(ctx); err != nil {
+			log.Error("Error waiting for rate limiter", "error", err)
+			return nil, fmt.Errorf("error waiting for rate limiter: %w", err)
+		}
+
 		_, err := comatproto.RepoApplyWrites(ctx, &client, batch)
 		if err != nil {
 			log.Error("Error applying writes", "error", err)

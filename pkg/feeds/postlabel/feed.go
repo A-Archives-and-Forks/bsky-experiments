@@ -43,16 +43,16 @@ func (f *Feed) GetPage(ctx context.Context, feed string, userDID string, limit i
 	defer span.End()
 
 	// Temporary hardcoded pinned post
-	// feedPosts := []*appbsky.FeedDefs_SkeletonFeedPost{
-	// 	{
-	// 		Post: pinnedPost,
-	// 		Reason: &appbsky.FeedDefs_SkeletonFeedPost_Reason{
-	// 			FeedDefs_SkeletonReasonPin: &appbsky.FeedDefs_SkeletonReasonPin{},
-	// 		},
-	// 	},
-	// }
+	feedPosts := []*appbsky.FeedDefs_SkeletonFeedPost{
+		{
+			Post: pinnedPost,
+			Reason: &appbsky.FeedDefs_SkeletonFeedPost_Reason{
+				FeedDefs_SkeletonReasonPin: &appbsky.FeedDefs_SkeletonReasonPin{},
+			},
+		},
+	}
 
-	// return feedPosts, nil, nil
+	return feedPosts, nil, nil
 
 	var err error
 	score := float64(-1)

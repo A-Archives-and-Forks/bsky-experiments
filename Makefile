@@ -106,17 +106,6 @@ consumer-up:
 	@echo "Starting Consumer..."
 	docker compose -f build/consumer/docker-compose.yml up --build -d
 
-# Build Jazbot
-.PHONY: build-jazbot
-build-jazbot:
-	@echo "Building Jazbot Go binary..."
-	$(GO_CMD_W_CGO) build -o jazbot cmd/jazbot/*.go
-
-.PHONY: jazbot-up
-jazbot-up:
-	@echo "Starting Jazbot..."
-	docker compose -f build/jazbot/docker-compose.yml up --build -d
-
 # Generate SQLC Code
 .PHONY: sqlc
 sqlc:
