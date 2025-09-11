@@ -333,6 +333,8 @@ func (c *Consumer) saveHLLs(ctx context.Context) error {
 }
 
 func (c *Consumer) loadHLLs(ctx context.Context) error {
+	c.logger.Info("loading existing HLLs from database")
+
 	c.hllLock.Lock()
 	defer c.hllLock.Unlock()
 
@@ -359,6 +361,8 @@ func (c *Consumer) loadHLLs(ctx context.Context) error {
 			deleteAfter: row.DeleteAfter,
 		}
 	}
+
+	c.logger.Info("loaded existing HLLs from database", "count", len(c.hll))
 
 	return nil
 }
