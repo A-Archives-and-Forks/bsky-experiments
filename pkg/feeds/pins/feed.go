@@ -17,7 +17,7 @@ type Feed struct {
 	Store        *store.Store
 }
 
-var pinnedPost = "at://did:plc:q6gjnaw2blty4crticxkmujt/app.bsky.feed.post/3lb3pxkepac2c"
+var pinnedPost = "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3lydtaqtzu22f"
 
 type NotFoundError struct {
 	error
