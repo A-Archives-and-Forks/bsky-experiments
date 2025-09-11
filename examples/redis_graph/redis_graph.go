@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store/store_queries"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/exp/slog"
 )

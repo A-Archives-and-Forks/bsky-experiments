@@ -3,8 +3,8 @@ package endpoints
 import (
 	"net/http"
 
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store/store_queries"
 	"github.com/gin-gonic/gin"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
 	"go.opentelemetry.io/otel/attribute"
 )
 

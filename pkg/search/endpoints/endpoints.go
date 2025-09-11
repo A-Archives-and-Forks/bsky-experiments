@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/atproto/identity"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store"
+	"github.com/jazware/bsky-experiments/pkg/consumer"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store"
 	"golang.org/x/time/rate"
 
-	"github.com/ericvolp12/bsky-experiments/pkg/usercount"
+	"github.com/jazware/bsky-experiments/pkg/usercount"
 	"go.opentelemetry.io/otel"
 )
 

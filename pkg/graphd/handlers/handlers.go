@@ -6,8 +6,8 @@ import (
 	"log/slog"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/ericvolp12/bsky-experiments/pkg/graphd"
-	"github.com/ericvolp12/bsky-experiments/pkg/graphd/bitmapper"
+	"github.com/jazware/bsky-experiments/pkg/graphd"
+	"github.com/jazware/bsky-experiments/pkg/graphd/bitmapper"
 	"github.com/labstack/echo/v4"
 )
 

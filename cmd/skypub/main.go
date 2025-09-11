@@ -10,7 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/ericvolp12/bsky-experiments/pkg/rss"
+	"github.com/jazware/bsky-experiments/pkg/rss"
 	"github.com/urfave/cli/v2"
 )
 

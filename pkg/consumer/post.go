@@ -10,8 +10,8 @@ import (
 	"github.com/araddon/dateparse"
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store/store_queries"
-	"github.com/ericvolp12/bsky-experiments/pkg/sharddb"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
+	"github.com/jazware/bsky-experiments/pkg/sharddb"
 
 	"github.com/goccy/go-json"
 	"github.com/sqlc-dev/pqtype"

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ericvolp12/bsky-experiments/pkg/graphd/bitmapper"
+	"github.com/jazware/bsky-experiments/pkg/graphd/bitmapper"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/RoaringBitmap/roaring"

@@ -14,8 +14,8 @@ import (
 
 	_ "github.com/joho/godotenv/autoload"
 
-	"github.com/ericvolp12/bsky-experiments/pkg/graphd"
-	"github.com/ericvolp12/bsky-experiments/pkg/graphd/handlers"
+	"github.com/jazware/bsky-experiments/pkg/graphd"
+	"github.com/jazware/bsky-experiments/pkg/graphd/handlers"
 	"github.com/labstack/echo-contrib/echoprometheus"
 	"github.com/labstack/echo/v4"
 	"github.com/prometheus/client_golang/prometheus"

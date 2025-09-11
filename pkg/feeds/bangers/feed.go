@@ -11,8 +11,8 @@ import (
 	"encoding/json"
 
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store/store_queries"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 )

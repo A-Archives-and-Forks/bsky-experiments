@@ -106,11 +106,24 @@ consumer-up:
 	@echo "Starting Consumer..."
 	docker compose -f build/consumer/docker-compose.yml up --build -d
 
+
+# Build the Stats Service
+.PHONY: build-stats
+build-stats:
+	@echo "Building Stats Go binary..."
+	$(GO_CMD_W_CGO) build -o stats cmd/stats/*.go
+	
+.PHONY: stats-up
+stats-up:
+	@echo "Starting Stats Service..."
+	docker compose -f build/stats/docker-compose.yml up --build -d
+
 # Generate SQLC Code
 .PHONY: sqlc
 sqlc:
 	@echo "Generating SQLC code for store..."
 	sqlc generate -f pkg/consumer/store/sqlc.yaml
+	sqlc generate -f pkg/stats/sqlc.yaml
 
 .PHONY: empty-plc
 empty-plc:

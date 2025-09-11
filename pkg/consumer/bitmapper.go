@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store"
-	"github.com/ericvolp12/bsky-experiments/pkg/consumer/store/store_queries"
 	lru "github.com/hashicorp/golang-lru/arc/v2"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store"
+	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
 	"golang.org/x/sync/semaphore"
 )
 
