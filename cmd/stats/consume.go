@@ -73,8 +73,10 @@ var consumeCmd = &cli.Command{
 		// Flags
 		opt := struct {
 			JetstreamWebsocketURL string
+			DBURL                 string
 		}{
 			JetstreamWebsocketURL: cctx.String("jetstream-websocket-url"),
+			DBURL:                 cctx.String("db-url"),
 		}
 
 		logger := telemetry.StartLogger(cctx)
@@ -85,7 +87,7 @@ var consumeCmd = &cli.Command{
 			return errors.Join(err, errors.New("failed to parse jetstream websocket URL"))
 		}
 
-		db, err := sql.Open("postgres", cctx.String("db-url"))
+		db, err := sql.Open("postgres", opt.DBURL)
 		if err != nil {
 			return errors.Join(err, errors.New("failed to connect to Postgres"))
 		}
