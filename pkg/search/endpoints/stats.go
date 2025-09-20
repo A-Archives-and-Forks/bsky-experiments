@@ -82,7 +82,6 @@ func (api *API) GetAuthorStats(c *gin.Context) {
 	api.StatsCacheRWMux.RUnlock()
 
 	c.JSON(http.StatusOK, statsFromCache)
-	return
 }
 
 func (api *API) RefreshSiteStats(ctx context.Context) error {
@@ -97,7 +96,7 @@ func (api *API) RefreshSiteStats(ctx context.Context) error {
 	}
 	totalUsers.Set(float64(userCount))
 
-	dailyDatapointsRaw, err := api.Store.Queries.GetDailySummaries(ctx)
+	dailyDatapointsRaw, err := api.Stats.GetAllDailyStatsSummaries(ctx, 10_000) // Get up to 10,000 days of data
 	if err != nil {
 		log.Printf("Error getting daily datapoints: %v", err)
 		return fmt.Errorf("error getting daily datapoints: %w", err)
@@ -111,19 +110,15 @@ func (api *API) RefreshSiteStats(ctx context.Context) error {
 			continue
 		}
 		dailyDatapoints = append(dailyDatapoints, DailyDatapoint{
-			Date:                    datapoint.Date.UTC().Format("2006-01-02"),
-			LikesPerDay:             datapoint.LikesPerDay,
-			DailyActiveLikers:       datapoint.DailyActiveLikers,
-			DailyActivePosters:      datapoint.DailyActivePosters,
-			PostsPerDay:             datapoint.PostsPerDay,
-			PostsWithImagesPerDay:   datapoint.PostsWithImagesPerDay,
-			ImagesPerDay:            datapoint.ImagesPerDay,
-			ImagesWithAltTextPerDay: datapoint.ImagesWithAltTextPerDay,
-			FirstTimePosters:        datapoint.FirstTimePosters,
-			FollowsPerDay:           datapoint.FollowsPerDay,
-			DailyActiveFollowers:    datapoint.DailyActiveFollowers,
-			BlocksPerDay:            datapoint.BlocksPerDay,
-			DailyActiveBlockers:     datapoint.DailyActiveBlockers,
+			Date:                 datapoint.Date.UTC().Format("2006-01-02"),
+			LikesPerDay:          datapoint.LikesPerDay,
+			DailyActiveLikers:    datapoint.DailyActiveLikers,
+			DailyActivePosters:   datapoint.DailyActivePosters,
+			PostsPerDay:          datapoint.PostsPerDay,
+			FollowsPerDay:        datapoint.FollowsPerDay,
+			DailyActiveFollowers: datapoint.DailyActiveFollowers,
+			BlocksPerDay:         datapoint.BlocksPerDay,
+			DailyActiveBlockers:  datapoint.DailyActiveBlockers,
 		})
 	}
 

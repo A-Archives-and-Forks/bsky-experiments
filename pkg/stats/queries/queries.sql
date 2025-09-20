@@ -67,7 +67,11 @@ WHERE daily_stats_summary.date = EXCLUDED.date;
 SELECT *
 FROM daily_stats_summary
 WHERE date = $1;
-
+-- name: GetAllDailyStatsSummaries :many
+SELECT *
+FROM daily_stats_summary
+ORDER BY date ASC
+LIMIT $1;
 -- name: GetCursor :one
 SELECT last_cursor
 FROM stats_cursors

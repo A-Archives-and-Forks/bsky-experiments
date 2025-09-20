@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jazware/bsky-experiments/pkg/consumer/store"
 	"github.com/jazware/bsky-experiments/pkg/search/endpoints"
+	statsqueries "github.com/jazware/bsky-experiments/pkg/stats/stats_queries"
 	"github.com/jazware/bsky-experiments/pkg/tracing"
 	"github.com/jazware/bsky-experiments/pkg/usercount"
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -102,14 +103,20 @@ func main() {
 	}
 	defer store.Close()
 
+	stats := statsqueries.New(store.DB)
+
 	userCount := usercount.NewUserCount(ctx, redisClient)
 
 	api, err := endpoints.NewAPI(
 		store,
+		stats,
 		userCount,
 		magicHeaderVal,
 		30*time.Second, // Stats Cache TTL
 	)
+	if err != nil {
+		log.Fatalf("Failed to create API: %v", err)
+	}
 
 	router := gin.New()
 

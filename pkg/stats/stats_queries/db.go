@@ -30,6 +30,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.getActiveHLLMetricsStmt, err = db.PrepareContext(ctx, getActiveHLLMetrics); err != nil {
 		return nil, fmt.Errorf("error preparing query GetActiveHLLMetrics: %w", err)
 	}
+	if q.getAllDailyStatsSummariesStmt, err = db.PrepareContext(ctx, getAllDailyStatsSummaries); err != nil {
+		return nil, fmt.Errorf("error preparing query GetAllDailyStatsSummaries: %w", err)
+	}
 	if q.getCursorStmt, err = db.PrepareContext(ctx, getCursor); err != nil {
 		return nil, fmt.Errorf("error preparing query GetCursor: %w", err)
 	}
@@ -64,6 +67,11 @@ func (q *Queries) Close() error {
 	if q.getActiveHLLMetricsStmt != nil {
 		if cerr := q.getActiveHLLMetricsStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getActiveHLLMetricsStmt: %w", cerr)
+		}
+	}
+	if q.getAllDailyStatsSummariesStmt != nil {
+		if cerr := q.getAllDailyStatsSummariesStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing getAllDailyStatsSummariesStmt: %w", cerr)
 		}
 	}
 	if q.getCursorStmt != nil {
@@ -138,31 +146,33 @@ func (q *Queries) queryRow(ctx context.Context, stmt *sql.Stmt, query string, ar
 }
 
 type Queries struct {
-	db                          DBTX
-	tx                          *sql.Tx
-	deleteOldHLLStmt            *sql.Stmt
-	getActiveHLLMetricsStmt     *sql.Stmt
-	getCursorStmt               *sql.Stmt
-	getDailyStatsSummaryStmt    *sql.Stmt
-	getHLLStmt                  *sql.Stmt
-	getHLLsByMetricInRangeStmt  *sql.Stmt
-	insertDailyStatsSummaryStmt *sql.Stmt
-	upsertCursorStmt            *sql.Stmt
-	upsertHLLStmt               *sql.Stmt
+	db                            DBTX
+	tx                            *sql.Tx
+	deleteOldHLLStmt              *sql.Stmt
+	getActiveHLLMetricsStmt       *sql.Stmt
+	getAllDailyStatsSummariesStmt *sql.Stmt
+	getCursorStmt                 *sql.Stmt
+	getDailyStatsSummaryStmt      *sql.Stmt
+	getHLLStmt                    *sql.Stmt
+	getHLLsByMetricInRangeStmt    *sql.Stmt
+	insertDailyStatsSummaryStmt   *sql.Stmt
+	upsertCursorStmt              *sql.Stmt
+	upsertHLLStmt                 *sql.Stmt
 }
 
 func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 	return &Queries{
-		db:                          tx,
-		tx:                          tx,
-		deleteOldHLLStmt:            q.deleteOldHLLStmt,
-		getActiveHLLMetricsStmt:     q.getActiveHLLMetricsStmt,
-		getCursorStmt:               q.getCursorStmt,
-		getDailyStatsSummaryStmt:    q.getDailyStatsSummaryStmt,
-		getHLLStmt:                  q.getHLLStmt,
-		getHLLsByMetricInRangeStmt:  q.getHLLsByMetricInRangeStmt,
-		insertDailyStatsSummaryStmt: q.insertDailyStatsSummaryStmt,
-		upsertCursorStmt:            q.upsertCursorStmt,
-		upsertHLLStmt:               q.upsertHLLStmt,
+		db:                            tx,
+		tx:                            tx,
+		deleteOldHLLStmt:              q.deleteOldHLLStmt,
+		getActiveHLLMetricsStmt:       q.getActiveHLLMetricsStmt,
+		getAllDailyStatsSummariesStmt: q.getAllDailyStatsSummariesStmt,
+		getCursorStmt:                 q.getCursorStmt,
+		getDailyStatsSummaryStmt:      q.getDailyStatsSummaryStmt,
+		getHLLStmt:                    q.getHLLStmt,
+		getHLLsByMetricInRangeStmt:    q.getHLLsByMetricInRangeStmt,
+		insertDailyStatsSummaryStmt:   q.insertDailyStatsSummaryStmt,
+		upsertCursorStmt:              q.upsertCursorStmt,
+		upsertHLLStmt:                 q.upsertHLLStmt,
 	}
 }

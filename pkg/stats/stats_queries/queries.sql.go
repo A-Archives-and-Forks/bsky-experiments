@@ -65,6 +65,47 @@ func (q *Queries) GetActiveHLLMetrics(ctx context.Context, arg GetActiveHLLMetri
 	return items, nil
 }
 
+const getAllDailyStatsSummaries = `-- name: GetAllDailyStatsSummaries :many
+SELECT date, "Daily Active Users", "Likes per Day", "Daily Active Likers", "Posts per Day", "Daily Active Posters", "Follows per Day", "Daily Active Followers", "Blocks per Day", "Daily Active Blockers"
+FROM daily_stats_summary
+ORDER BY date ASC
+LIMIT $1
+`
+
+func (q *Queries) GetAllDailyStatsSummaries(ctx context.Context, limit int32) ([]DailyStatsSummary, error) {
+	rows, err := q.query(ctx, q.getAllDailyStatsSummariesStmt, getAllDailyStatsSummaries, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DailyStatsSummary
+	for rows.Next() {
+		var i DailyStatsSummary
+		if err := rows.Scan(
+			&i.Date,
+			&i.DailyActiveUsers,
+			&i.LikesPerDay,
+			&i.DailyActiveLikers,
+			&i.PostsPerDay,
+			&i.DailyActivePosters,
+			&i.FollowsPerDay,
+			&i.DailyActiveFollowers,
+			&i.BlocksPerDay,
+			&i.DailyActiveBlockers,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCursor = `-- name: GetCursor :one
 SELECT last_cursor
 FROM stats_cursors

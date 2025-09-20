@@ -249,82 +249,80 @@ func NewConsumer(
 	go func() {
 		period := time.Second * 30
 		t := time.NewTicker(period)
-		for {
-			select {
-			case <-t.C:
-				c.tkOpLk.Lock()
-				opVals := c.topKOperations.Values()
-				c.topKOperations = newTopK()
-				c.tkOpLk.Unlock()
-				c.tkFollowLk.Lock()
-				followVals := c.topKFollowedUsers.Values()
-				c.topKFollowedUsers = newTopK()
-				c.tkFollowLk.Unlock()
-				c.tkLikeLk.Lock()
-				likeVals := c.topKLikedEnts.Values()
-				c.topKLikedEnts = newTopK()
-				c.tkLikeLk.Unlock()
+		defer t.Stop()
+		for range t.C {
+			c.tkOpLk.Lock()
+			opVals := c.topKOperations.Values()
+			c.topKOperations = newTopK()
+			c.tkOpLk.Unlock()
+			c.tkFollowLk.Lock()
+			followVals := c.topKFollowedUsers.Values()
+			c.topKFollowedUsers = newTopK()
+			c.tkFollowLk.Unlock()
+			c.tkLikeLk.Lock()
+			likeVals := c.topKLikedEnts.Values()
+			c.topKLikedEnts = newTopK()
+			c.tkLikeLk.Unlock()
 
-				now := time.Now()
+			now := time.Now()
 
-				topOps := make([]string, 0, len(opVals))
-				for _, v := range opVals {
-					if v.Count > 50 {
-						topOps = append(topOps, fmt.Sprintf("%s | %d", v.Element, v.Count))
-						parts := strings.Split(v.Element, "_")
-						if len(parts) != 3 {
-							continue
-						}
-						if err := c.Store.Queries.InsertOperationOutliers(ctx, store_queries.InsertOperationOutliersParams{
-							ActorDid:   parts[0],
-							Collection: parts[1],
-							Operation:  parts[2],
-							NumOps:     int64(v.Count),
-							Period:     period.Nanoseconds(),
-							CreatedAt:  now,
-						}); err != nil {
-							c.Logger.Error("failed to insert operation outlier", "err", err)
-						}
+			topOps := make([]string, 0, len(opVals))
+			for _, v := range opVals {
+				if v.Count > 50 {
+					topOps = append(topOps, fmt.Sprintf("%s | %d", v.Element, v.Count))
+					parts := strings.Split(v.Element, "_")
+					if len(parts) != 3 {
+						continue
+					}
+					if err := c.Store.Queries.InsertOperationOutliers(ctx, store_queries.InsertOperationOutliersParams{
+						ActorDid:   parts[0],
+						Collection: parts[1],
+						Operation:  parts[2],
+						NumOps:     int64(v.Count),
+						Period:     period.Nanoseconds(),
+						CreatedAt:  now,
+					}); err != nil {
+						c.Logger.Error("failed to insert operation outlier", "err", err)
 					}
 				}
-
-				topFollows := make([]string, 0, len(followVals))
-				for _, v := range followVals {
-					if v.Count > 20 {
-						topFollows = append(topFollows, fmt.Sprintf("%s | %d", v.Element, v.Count))
-						if err := c.Store.Queries.InsertFollowerOutliers(ctx, store_queries.InsertFollowerOutliersParams{
-							Subject:      v.Element,
-							NumFollowers: int64(v.Count),
-							Period:       period.Nanoseconds(),
-							CreatedAt:    now,
-						}); err != nil {
-							c.Logger.Error("failed to insert follow outlier", "err", err)
-						}
-					}
-				}
-
-				topLikes := make([]string, 0, len(likeVals))
-				for _, v := range likeVals {
-					if v.Count > 20 {
-						topLikes = append(topLikes, fmt.Sprintf("%s | %d", v.Element, v.Count))
-						if err := c.Store.Queries.InsertLikeOutliers(ctx, store_queries.InsertLikeOutliersParams{
-							Subject:   v.Element,
-							NumLikes:  int64(v.Count),
-							Period:    period.Nanoseconds(),
-							CreatedAt: now,
-						}); err != nil {
-							c.Logger.Error("failed to insert like outlier", "err", err)
-						}
-					}
-				}
-
-				c.Logger.Infow(
-					"topk summary",
-					"top_ops", strings.Join(topOps, "\n"),
-					"top_follows", strings.Join(topFollows, "\n"),
-					"top_likes", strings.Join(topLikes, "\n"),
-				)
 			}
+
+			topFollows := make([]string, 0, len(followVals))
+			for _, v := range followVals {
+				if v.Count > 20 {
+					topFollows = append(topFollows, fmt.Sprintf("%s | %d", v.Element, v.Count))
+					if err := c.Store.Queries.InsertFollowerOutliers(ctx, store_queries.InsertFollowerOutliersParams{
+						Subject:      v.Element,
+						NumFollowers: int64(v.Count),
+						Period:       period.Nanoseconds(),
+						CreatedAt:    now,
+					}); err != nil {
+						c.Logger.Error("failed to insert follow outlier", "err", err)
+					}
+				}
+			}
+
+			topLikes := make([]string, 0, len(likeVals))
+			for _, v := range likeVals {
+				if v.Count > 20 {
+					topLikes = append(topLikes, fmt.Sprintf("%s | %d", v.Element, v.Count))
+					if err := c.Store.Queries.InsertLikeOutliers(ctx, store_queries.InsertLikeOutliersParams{
+						Subject:   v.Element,
+						NumLikes:  int64(v.Count),
+						Period:    period.Nanoseconds(),
+						CreatedAt: now,
+					}); err != nil {
+						c.Logger.Error("failed to insert like outlier", "err", err)
+					}
+				}
+			}
+
+			c.Logger.Infow(
+				"topk summary",
+				"top_ops", strings.Join(topOps, "\n"),
+				"top_follows", strings.Join(topFollows, "\n"),
+				"top_likes", strings.Join(topLikes, "\n"),
+			)
 		}
 	}()
 
