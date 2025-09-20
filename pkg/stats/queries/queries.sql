@@ -32,33 +32,32 @@ WHERE delete_after < NOW();
 SELECT * FROM hll_data
 WHERE window_start >= $1
   AND window_end <= $2;
+-- name: GetHLLsByMetricInRange :many
+SELECT * FROM hll_data
+WHERE metric_name = $1
+  AND window_start >= $2
+  AND window_end <= $3;
 -- name: InsertDailyStatsSummary :exec
 INSERT INTO daily_stats_summary (
         date,
+        "Daily Active Users",
         "Likes per Day",
         "Daily Active Likers",
-        "Daily Active Posters",
         "Posts per Day",
-        "Posts with Images per Day",
-        "Images per Day",
-        "Images with Alt Text per Day",
-        "First Time Posters",
+        "Daily Active Posters",
         "Follows per Day",
         "Daily Active Followers",
         "Blocks per Day",
         "Daily Active Blockers"
     )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (date) DO
 UPDATE
-SET "Likes per Day" = EXCLUDED."Likes per Day",
+SET "Daily Active Users" = EXCLUDED."Daily Active Users",
+    "Likes per Day" = EXCLUDED."Likes per Day",
     "Daily Active Likers" = EXCLUDED."Daily Active Likers",
-    "Daily Active Posters" = EXCLUDED."Daily Active Posters",
     "Posts per Day" = EXCLUDED."Posts per Day",
-    "Posts with Images per Day" = EXCLUDED."Posts with Images per Day",
-    "Images per Day" = EXCLUDED."Images per Day",
-    "Images with Alt Text per Day" = EXCLUDED."Images with Alt Text per Day",
-    "First Time Posters" = EXCLUDED."First Time Posters",
+    "Daily Active Posters" = EXCLUDED."Daily Active Posters",
     "Follows per Day" = EXCLUDED."Follows per Day",
     "Daily Active Followers" = EXCLUDED."Daily Active Followers",
     "Blocks per Day" = EXCLUDED."Blocks per Day",

@@ -39,6 +39,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.getHLLStmt, err = db.PrepareContext(ctx, getHLL); err != nil {
 		return nil, fmt.Errorf("error preparing query GetHLL: %w", err)
 	}
+	if q.getHLLsByMetricInRangeStmt, err = db.PrepareContext(ctx, getHLLsByMetricInRange); err != nil {
+		return nil, fmt.Errorf("error preparing query GetHLLsByMetricInRange: %w", err)
+	}
 	if q.insertDailyStatsSummaryStmt, err = db.PrepareContext(ctx, insertDailyStatsSummary); err != nil {
 		return nil, fmt.Errorf("error preparing query InsertDailyStatsSummary: %w", err)
 	}
@@ -76,6 +79,11 @@ func (q *Queries) Close() error {
 	if q.getHLLStmt != nil {
 		if cerr := q.getHLLStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getHLLStmt: %w", cerr)
+		}
+	}
+	if q.getHLLsByMetricInRangeStmt != nil {
+		if cerr := q.getHLLsByMetricInRangeStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing getHLLsByMetricInRangeStmt: %w", cerr)
 		}
 	}
 	if q.insertDailyStatsSummaryStmt != nil {
@@ -137,6 +145,7 @@ type Queries struct {
 	getCursorStmt               *sql.Stmt
 	getDailyStatsSummaryStmt    *sql.Stmt
 	getHLLStmt                  *sql.Stmt
+	getHLLsByMetricInRangeStmt  *sql.Stmt
 	insertDailyStatsSummaryStmt *sql.Stmt
 	upsertCursorStmt            *sql.Stmt
 	upsertHLLStmt               *sql.Stmt
@@ -151,6 +160,7 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		getCursorStmt:               q.getCursorStmt,
 		getDailyStatsSummaryStmt:    q.getDailyStatsSummaryStmt,
 		getHLLStmt:                  q.getHLLStmt,
+		getHLLsByMetricInRangeStmt:  q.getHLLsByMetricInRangeStmt,
 		insertDailyStatsSummaryStmt: q.insertDailyStatsSummaryStmt,
 		upsertCursorStmt:            q.upsertCursorStmt,
 		upsertHLLStmt:               q.upsertHLLStmt,

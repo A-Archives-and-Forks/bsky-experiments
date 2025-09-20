@@ -128,15 +128,28 @@ var consumeCmd = &cli.Command{
 		// Start the cursor save loop
 		go c.periodicallySaveCursor(ctx)
 
-		// Periodically trim old HLLs
+		// Periodically trim old HLLs and update daily summary
 		go func() {
 			ticker := time.NewTicker(15 * time.Minute)
 			defer ticker.Stop()
+			onStart := make(chan struct{}, 1)
+			onStart <- struct{}{}
+
 			for {
 				select {
 				case <-ticker.C:
 					if err := c.trimOldHLLs(ctx); err != nil {
 						logger.Error("failed to trim old HLLs", "error", err)
+					}
+					if err := c.updateDailySummary(ctx, time.Now().UTC()); err != nil {
+						logger.Error("failed to update daily summary", "error", err)
+					}
+				case <-onStart:
+					if err := c.trimOldHLLs(ctx); err != nil {
+						logger.Error("failed to trim old HLLs", "error", err)
+					}
+					if err := c.updateDailySummary(ctx, time.Now().UTC()); err != nil {
+						logger.Error("failed to update daily summary", "error", err)
 					}
 				case <-c.cursorSaveShutdown:
 					logger.Info("cursor save shutdown received, stopping HLL trim loop")
@@ -365,6 +378,243 @@ func (c *Consumer) loadHLLs(ctx context.Context) error {
 	}
 
 	c.logger.Info("loaded existing HLLs from database", "count", len(c.hll))
+
+	return nil
+}
+
+func (c *Consumer) updateDailySummary(ctx context.Context, date time.Time) error {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	c.logger.Info("updating daily stats summary", "date", startOfDay.Format("2006-01-02"))
+
+	// Get DAU
+	dauHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  "dau",
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get DAU HLLs: %w", err)
+	}
+	dauSketch := hyperloglog.New16()
+	for _, hllRow := range dauHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal DAU HLL sketch", "error", err)
+			continue
+		}
+		if err := dauSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge DAU HLL sketch", "error", err)
+			continue
+		}
+	}
+	dau := int64(dauSketch.Estimate())
+
+	likesKey := "records_create_app.bsky.feed.like"
+	likersKey := "actors_create_app.bsky.feed.like"
+	postsKey := "records_create_app.bsky.feed.post"
+	postersKey := "actors_create_app.bsky.feed.post"
+	followsKey := "records_create_app.bsky.graph.follow"
+	followersKey := "actors_create_app.bsky.graph.follow"
+	blocksKey := "records_create_app.bsky.graph.block"
+	blockersKey := "actors_create_app.bsky.graph.block"
+
+	likesHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  likesKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get likes HLLs: %w", err)
+	}
+	likesSketch := hyperloglog.New16()
+	for _, hllRow := range likesHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal likes HLL sketch", "error", err)
+			continue
+		}
+		if err := likesSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge likes HLL sketch", "error", err)
+			continue
+		}
+	}
+	likesPerDay := int64(likesSketch.Estimate())
+
+	likersHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  likersKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get likers HLLs: %w", err)
+	}
+	likersSketch := hyperloglog.New16()
+	for _, hllRow := range likersHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal likers HLL sketch", "error", err)
+			continue
+		}
+		if err := likersSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge likers HLL sketch", "error", err)
+			continue
+		}
+	}
+	dailyActiveLikers := int64(likersSketch.Estimate())
+
+	postsHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  postsKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get posts HLLs: %w", err)
+	}
+	postsSketch := hyperloglog.New16()
+	for _, hllRow := range postsHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal posts HLL sketch", "error", err)
+			continue
+		}
+		if err := postsSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge posts HLL sketch", "error", err)
+			continue
+		}
+	}
+	postsPerDay := int64(postsSketch.Estimate())
+
+	postersHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  postersKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get posters HLLs: %w", err)
+	}
+	postersSketch := hyperloglog.New16()
+	for _, hllRow := range postersHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal posters HLL sketch", "error", err)
+			continue
+		}
+		if err := postersSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge posters HLL sketch", "error", err)
+			continue
+		}
+	}
+	dailyActivePosters := int64(postersSketch.Estimate())
+
+	followsHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  followsKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get follows HLLs: %w", err)
+	}
+	followsSketch := hyperloglog.New16()
+	for _, hllRow := range followsHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal follows HLL sketch", "error", err)
+			continue
+		}
+		if err := followsSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge follows HLL sketch", "error", err)
+			continue
+		}
+	}
+	followsPerDay := int64(followsSketch.Estimate())
+
+	followersHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  followersKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get followers HLLs: %w", err)
+	}
+	followersSketch := hyperloglog.New16()
+	for _, hllRow := range followersHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal followers HLL sketch", "error", err)
+			continue
+		}
+		if err := followersSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge followers HLL sketch", "error", err)
+			continue
+		}
+	}
+	dailyActiveFollowers := int64(followersSketch.Estimate())
+
+	blocksHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  blocksKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get blocks HLLs: %w", err)
+	}
+	blocksSketch := hyperloglog.New16()
+	for _, hllRow := range blocksHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal blocks HLL sketch", "error", err)
+			continue
+		}
+		if err := blocksSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge blocks HLL sketch", "error", err)
+			continue
+		}
+	}
+	blocksPerDay := int64(blocksSketch.Estimate())
+
+	blockersHLLs, err := c.queries.GetHLLsByMetricInRange(ctx, statsqueries.GetHLLsByMetricInRangeParams{
+		MetricName:  blockersKey,
+		WindowStart: startOfDay,
+		WindowEnd:   endOfDay,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get blockers HLLs: %w", err)
+	}
+	blockersSketch := hyperloglog.New16()
+	for _, hllRow := range blockersHLLs {
+		sketch := hyperloglog.New16()
+		if err := sketch.UnmarshalBinary(hllRow.Hll); err != nil {
+			c.logger.Error("failed to unmarshal blockers HLL sketch", "error", err)
+			continue
+		}
+		if err := blockersSketch.Merge(sketch); err != nil {
+			c.logger.Error("failed to merge blockers HLL sketch", "error", err)
+			continue
+		}
+	}
+	dailyActiveBlockers := int64(blockersSketch.Estimate())
+
+	// Insert or update the daily stats summary
+
+	if err := c.queries.InsertDailyStatsSummary(ctx, statsqueries.InsertDailyStatsSummaryParams{
+		Date:                 startOfDay,
+		DailyActiveUsers:     dau,
+		LikesPerDay:          likesPerDay,
+		DailyActiveLikers:    dailyActiveLikers,
+		PostsPerDay:          postsPerDay,
+		DailyActivePosters:   dailyActivePosters,
+		FollowsPerDay:        followsPerDay,
+		DailyActiveFollowers: dailyActiveFollowers,
+		BlocksPerDay:         blocksPerDay,
+		DailyActiveBlockers:  dailyActiveBlockers,
+	}); err != nil {
+		return fmt.Errorf("failed to insert/update daily stats summary: %w", err)
+	}
+
+	c.logger.Info("updated daily stats summary", "date", startOfDay.Format("2006-01-02"),
+		"daily_active_users", dau)
 
 	return nil
 }

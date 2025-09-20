@@ -80,7 +80,7 @@ func (q *Queries) GetCursor(ctx context.Context) (int64, error) {
 }
 
 const getDailyStatsSummary = `-- name: GetDailyStatsSummary :one
-SELECT date, "Likes per Day", "Daily Active Likers", "Daily Active Posters", "Posts per Day", "Posts with Images per Day", "Images per Day", "Images with Alt Text per Day", "First Time Posters", "Follows per Day", "Daily Active Followers", "Blocks per Day", "Daily Active Blockers"
+SELECT date, "Daily Active Users", "Likes per Day", "Daily Active Likers", "Posts per Day", "Daily Active Posters", "Follows per Day", "Daily Active Followers", "Blocks per Day", "Daily Active Blockers"
 FROM daily_stats_summary
 WHERE date = $1
 `
@@ -90,14 +90,11 @@ func (q *Queries) GetDailyStatsSummary(ctx context.Context, date time.Time) (Dai
 	var i DailyStatsSummary
 	err := row.Scan(
 		&i.Date,
+		&i.DailyActiveUsers,
 		&i.LikesPerDay,
 		&i.DailyActiveLikers,
-		&i.DailyActivePosters,
 		&i.PostsPerDay,
-		&i.PostsWithImagesPerDay,
-		&i.ImagesPerDay,
-		&i.ImagesWithAltTextPerDay,
-		&i.FirstTimePosters,
+		&i.DailyActivePosters,
 		&i.FollowsPerDay,
 		&i.DailyActiveFollowers,
 		&i.BlocksPerDay,
@@ -137,33 +134,73 @@ func (q *Queries) GetHLL(ctx context.Context, arg GetHLLParams) (HllDatum, error
 	return i, err
 }
 
+const getHLLsByMetricInRange = `-- name: GetHLLsByMetricInRange :many
+SELECT id, summary, metric_name, window_start, window_end, delete_after, created_at, updated_at, hll FROM hll_data
+WHERE metric_name = $1
+  AND window_start >= $2
+  AND window_end <= $3
+`
+
+type GetHLLsByMetricInRangeParams struct {
+	MetricName  string    `json:"metric_name"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
+}
+
+func (q *Queries) GetHLLsByMetricInRange(ctx context.Context, arg GetHLLsByMetricInRangeParams) ([]HllDatum, error) {
+	rows, err := q.query(ctx, q.getHLLsByMetricInRangeStmt, getHLLsByMetricInRange, arg.MetricName, arg.WindowStart, arg.WindowEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []HllDatum
+	for rows.Next() {
+		var i HllDatum
+		if err := rows.Scan(
+			&i.ID,
+			&i.Summary,
+			&i.MetricName,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.DeleteAfter,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Hll,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertDailyStatsSummary = `-- name: InsertDailyStatsSummary :exec
 INSERT INTO daily_stats_summary (
         date,
+        "Daily Active Users",
         "Likes per Day",
         "Daily Active Likers",
-        "Daily Active Posters",
         "Posts per Day",
-        "Posts with Images per Day",
-        "Images per Day",
-        "Images with Alt Text per Day",
-        "First Time Posters",
+        "Daily Active Posters",
         "Follows per Day",
         "Daily Active Followers",
         "Blocks per Day",
         "Daily Active Blockers"
     )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (date) DO
 UPDATE
-SET "Likes per Day" = EXCLUDED."Likes per Day",
+SET "Daily Active Users" = EXCLUDED."Daily Active Users",
+    "Likes per Day" = EXCLUDED."Likes per Day",
     "Daily Active Likers" = EXCLUDED."Daily Active Likers",
-    "Daily Active Posters" = EXCLUDED."Daily Active Posters",
     "Posts per Day" = EXCLUDED."Posts per Day",
-    "Posts with Images per Day" = EXCLUDED."Posts with Images per Day",
-    "Images per Day" = EXCLUDED."Images per Day",
-    "Images with Alt Text per Day" = EXCLUDED."Images with Alt Text per Day",
-    "First Time Posters" = EXCLUDED."First Time Posters",
+    "Daily Active Posters" = EXCLUDED."Daily Active Posters",
     "Follows per Day" = EXCLUDED."Follows per Day",
     "Daily Active Followers" = EXCLUDED."Daily Active Followers",
     "Blocks per Day" = EXCLUDED."Blocks per Day",
@@ -172,32 +209,26 @@ WHERE daily_stats_summary.date = EXCLUDED.date
 `
 
 type InsertDailyStatsSummaryParams struct {
-	Date                    time.Time `json:"date"`
-	LikesPerDay             int64     `json:"Likes per Day"`
-	DailyActiveLikers       int64     `json:"Daily Active Likers"`
-	DailyActivePosters      int64     `json:"Daily Active Posters"`
-	PostsPerDay             int64     `json:"Posts per Day"`
-	PostsWithImagesPerDay   int64     `json:"Posts with Images per Day"`
-	ImagesPerDay            int64     `json:"Images per Day"`
-	ImagesWithAltTextPerDay int64     `json:"Images with Alt Text per Day"`
-	FirstTimePosters        int64     `json:"First Time Posters"`
-	FollowsPerDay           int64     `json:"Follows per Day"`
-	DailyActiveFollowers    int64     `json:"Daily Active Followers"`
-	BlocksPerDay            int64     `json:"Blocks per Day"`
-	DailyActiveBlockers     int64     `json:"Daily Active Blockers"`
+	Date                 time.Time `json:"date"`
+	DailyActiveUsers     int64     `json:"Daily Active Users"`
+	LikesPerDay          int64     `json:"Likes per Day"`
+	DailyActiveLikers    int64     `json:"Daily Active Likers"`
+	PostsPerDay          int64     `json:"Posts per Day"`
+	DailyActivePosters   int64     `json:"Daily Active Posters"`
+	FollowsPerDay        int64     `json:"Follows per Day"`
+	DailyActiveFollowers int64     `json:"Daily Active Followers"`
+	BlocksPerDay         int64     `json:"Blocks per Day"`
+	DailyActiveBlockers  int64     `json:"Daily Active Blockers"`
 }
 
 func (q *Queries) InsertDailyStatsSummary(ctx context.Context, arg InsertDailyStatsSummaryParams) error {
 	_, err := q.exec(ctx, q.insertDailyStatsSummaryStmt, insertDailyStatsSummary,
 		arg.Date,
+		arg.DailyActiveUsers,
 		arg.LikesPerDay,
 		arg.DailyActiveLikers,
-		arg.DailyActivePosters,
 		arg.PostsPerDay,
-		arg.PostsWithImagesPerDay,
-		arg.ImagesPerDay,
-		arg.ImagesWithAltTextPerDay,
-		arg.FirstTimePosters,
+		arg.DailyActivePosters,
 		arg.FollowsPerDay,
 		arg.DailyActiveFollowers,
 		arg.BlocksPerDay,

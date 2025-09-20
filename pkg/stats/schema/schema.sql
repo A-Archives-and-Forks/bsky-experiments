@@ -1,18 +1,15 @@
 -- Daily Stats View
 CREATE TABLE daily_stats_summary (
     date date PRIMARY KEY,
-    "Likes per Day" BIGINT NOT NULL,
-    "Daily Active Likers" BIGINT NOT NULL,
-    "Daily Active Posters" BIGINT NOT NULL,
-    "Posts per Day" BIGINT NOT NULL,
-    "Posts with Images per Day" BIGINT NOT NULL,
-    "Images per Day" BIGINT NOT NULL,
-    "Images with Alt Text per Day" BIGINT NOT NULL,
-    "First Time Posters" BIGINT NOT NULL,
-    "Follows per Day" BIGINT NOT NULL,
-    "Daily Active Followers" BIGINT NOT NULL,
-    "Blocks per Day" BIGINT NOT NULL,
-    "Daily Active Blockers" BIGINT NOT NULL
+    "Daily Active Users" BIGINT DEFAULT 0 NOT NULL,
+    "Likes per Day" BIGINT DEFAULT 0 NOT NULL,
+    "Daily Active Likers" BIGINT DEFAULT 0 NOT NULL,
+    "Posts per Day" BIGINT DEFAULT 0 NOT NULL,
+    "Daily Active Posters" BIGINT DEFAULT 0 NOT NULL,
+    "Follows per Day" BIGINT DEFAULT 0 NOT NULL,
+    "Daily Active Followers" BIGINT DEFAULT 0 NOT NULL,
+    "Blocks per Day" BIGINT DEFAULT 0 NOT NULL,
+    "Daily Active Blockers" BIGINT DEFAULT 0 NOT NULL
 );
 CREATE INDEX daily_stats_summary_date ON daily_stats_summary (date);
 
