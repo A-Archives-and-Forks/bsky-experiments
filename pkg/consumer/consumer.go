@@ -809,37 +809,6 @@ func (c *Consumer) HandleDeleteRecord(
 		}
 	case "app.bsky.feed.repost":
 		span.SetAttributes(attribute.String("record_type", "feed_repost"))
-		// Get the repost from the database to get the subject
-		repost, err := c.Store.Queries.GetRepost(ctx, store_queries.GetRepostParams{
-			ActorDid: repo,
-			Rkey:     rkey,
-		})
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return fmt.Errorf("repost not found, so we can't delete it: %w", err)
-			}
-			return fmt.Errorf("can't delete repost: %w", err)
-		}
-
-		// Delete the repost from the database
-		err = c.Store.Queries.DeleteRepost(ctx, store_queries.DeleteRepostParams{
-			ActorDid: repo,
-			Rkey:     rkey,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to delete repost: %w", err)
-		}
-
-		// Decrement the repost count
-		err = c.Store.Queries.DecrementRepostCountByN(ctx, store_queries.DecrementRepostCountByNParams{
-			ActorDid:   repost.SubjectActorDid,
-			Collection: repost.SubjectNamespace,
-			Rkey:       repost.SubjectRkey,
-			NumReposts: 1,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to decrement repost count: %w", err)
-		}
 	case "app.bsky.graph.follow":
 		span.SetAttributes(attribute.String("record_type", "graph_follow"))
 		follow, err := c.Store.Queries.GetFollow(ctx, store_queries.GetFollowParams{
@@ -887,24 +856,6 @@ func (c *Consumer) HandleDeleteRecord(
 
 	case "app.bsky.graph.block":
 		span.SetAttributes(attribute.String("record_type", "graph_block"))
-		block, err := c.Store.Queries.GetBlock(ctx, store_queries.GetBlockParams{
-			ActorDid: repo,
-			Rkey:     rkey,
-		})
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return fmt.Errorf("block not found, so we can't delete it: %w", err)
-			}
-			return fmt.Errorf("can't delete block: %w", err)
-		}
-		err = c.Store.Queries.DeleteBlock(ctx, store_queries.DeleteBlockParams{
-			ActorDid: block.ActorDid,
-			Rkey:     rkey,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to delete block: %w", err)
-		}
-
 	}
 
 	return nil
@@ -1051,113 +1002,9 @@ func (c *Consumer) HandleCreateRecord(
 	case "app.bsky.feed.repost":
 		span.SetAttributes(attribute.String("record_type", "feed_repost"))
 		recordsProcessedCounter.WithLabelValues("feed_repost", c.SocketURL).Inc()
-
-		var repost bsky.FeedRepost
-		err := json.Unmarshal(rec, &repost)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal repost: %w", err)
-		}
-
-		recCreatedAt, parseError = dateparse.ParseAny(repost.CreatedAt)
-		var subjectURI *URI
-		if repost.Subject != nil {
-			subjectURI, err = GetURI(repost.Subject.Uri)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get Subject uri: %w", err)
-			}
-		}
-
-		if subjectURI == nil {
-			return nil, fmt.Errorf("invalid repost subject: %+v", repost.Subject)
-		}
-
-		// Check if we've already processed this record
-		_, err = c.Store.Queries.GetRepost(ctx, store_queries.GetRepostParams{
-			ActorDid: repo,
-			Rkey:     rkey,
-		})
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("failed to get repost: %w", err)
-			}
-		} else {
-			// We've already processed this record, so skip it
-			return nil, nil
-		}
-
-		err = c.Store.Queries.CreateRepost(ctx, store_queries.CreateRepostParams{
-			ActorDid:        repo,
-			Rkey:            rkey,
-			SubjectActorDid: subjectURI.Did,
-			Collection:      subjectURI.Collection,
-			SubjectRkey:     subjectURI.RKey,
-			CreatedAt:       sql.NullTime{Time: recCreatedAt, Valid: true},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create repost: %w", err)
-		}
-
-		// Increment the repost count
-		err = c.Store.Queries.IncrementRepostCountByN(ctx, store_queries.IncrementRepostCountByNParams{
-			ActorDid:   subjectURI.Did,
-			Collection: subjectURI.Collection,
-			Rkey:       subjectURI.RKey,
-			NumReposts: 1,
-		})
-		if err != nil {
-			log.Errorf("failed to increment repost count: %+v", err)
-		}
-
-		// Track the user in the reposters bitmap
-		// hourlyRepostBMKey := fmt.Sprintf("reposts_hourly:%s", recCreatedAt.Format("2006_01_02_15"))
-
-		// err = c.bitmapper.AddMember(ctx, hourlyRepostBMKey, repo)
-		// if err != nil {
-		// 	log.Errorf("failed to add member to reposters bitmap: %+v", err)
-		// }
 	case "app.bsky.graph.block":
 		span.SetAttributes(attribute.String("record_type", "graph_block"))
 		recordsProcessedCounter.WithLabelValues("graph_block", c.SocketURL).Inc()
-
-		var block bsky.GraphBlock
-		err := json.Unmarshal(rec, &block)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal block: %w", err)
-		}
-
-		recCreatedAt, parseError = dateparse.ParseAny(block.CreatedAt)
-
-		// Check if we've already processed this record
-		_, err = c.Store.Queries.GetBlock(ctx, store_queries.GetBlockParams{
-			ActorDid: repo,
-			Rkey:     rkey,
-		})
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("failed to get block: %w", err)
-			}
-		} else {
-			// We've already processed this record, so skip it
-			return nil, nil
-		}
-
-		err = c.Store.Queries.CreateBlock(ctx, store_queries.CreateBlockParams{
-			ActorDid:  repo,
-			Rkey:      rkey,
-			TargetDid: block.Subject,
-			CreatedAt: sql.NullTime{Time: recCreatedAt, Valid: true},
-		})
-		if err != nil {
-			log.Errorf("failed to create block: %+v", err)
-		}
-
-		// Track the user in the blockers bitmap
-		// hourlyBlocksBMKey := fmt.Sprintf("blocks_hourly:%s", recCreatedAt.Format("2006_01_02_15"))
-
-		// err = c.bitmapper.AddMember(ctx, hourlyBlocksBMKey, repo)
-		// if err != nil {
-		// 	log.Errorf("failed to add member to blockers bitmap: %+v", err)
-		// }
 	case "app.bsky.graph.follow":
 		span.SetAttributes(attribute.String("record_type", "graph_follow"))
 		recordsProcessedCounter.WithLabelValues("graph_follow", c.SocketURL).Inc()
