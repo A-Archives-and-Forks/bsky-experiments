@@ -104,6 +104,8 @@ func (api *API) RefreshSiteStats(ctx context.Context) error {
 
 	dailyDatapoints := []DailyDatapoint{}
 
+	var totalPosts, totalLikes, totalFollows int64
+
 	for _, datapoint := range dailyDatapointsRaw {
 		// Filter out datapoints before 2023-03-01 and after tomorrow
 		if datapoint.Date.Before(time.Date(2023, 3, 1, 0, 0, 0, 0, time.UTC)) || datapoint.Date.After(time.Now().AddDate(0, 0, 1)) {
@@ -120,6 +122,9 @@ func (api *API) RefreshSiteStats(ctx context.Context) error {
 			BlocksPerDay:         datapoint.BlocksPerDay,
 			DailyActiveBlockers:  datapoint.DailyActiveBlockers,
 		})
+		totalPosts += datapoint.PostsPerDay
+		totalLikes += datapoint.LikesPerDay
+		totalFollows += datapoint.FollowsPerDay
 	}
 
 	// Get Follower percentiles
@@ -140,32 +145,6 @@ func (api *API) RefreshSiteStats(ctx context.Context) error {
 		{Percentile: 0.997, Value: followerPercentilesRaw.P997},
 		{Percentile: 0.999, Value: followerPercentilesRaw.P999},
 		{Percentile: 0.9999, Value: followerPercentilesRaw.P9999},
-	}
-
-	res, err := api.Store.DB.QueryContext(ctx, "SELECT reltuples::bigint AS num_ents, relname as ent_type FROM pg_class WHERE relname in ('posts', 'follows', 'likes');")
-	if err != nil {
-		log.Printf("Error getting total posts: %v", err)
-		return fmt.Errorf("error getting total posts: %w", err)
-	}
-	defer res.Close()
-
-	var totalPosts, totalFollows, totalLikes int64
-	for res.Next() {
-		var numEnts int64
-		var entType string
-		err = res.Scan(&numEnts, &entType)
-		if err != nil {
-			log.Printf("Error scanning total posts: %v", err)
-			return fmt.Errorf("error scanning total posts: %w", err)
-		}
-		switch entType {
-		case "posts":
-			totalPosts = numEnts
-		case "follows":
-			totalFollows = numEnts
-		case "likes":
-			totalLikes = numEnts
-		}
 	}
 
 	// Lock the stats mux for writing
