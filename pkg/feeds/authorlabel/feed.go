@@ -42,11 +42,6 @@ func NewFeed(ctx context.Context, feedActorDID string, store *store.Store) (*Fee
 			Private: true,
 			GetPage: alf.GetMPLSPage,
 		},
-		"cl-tqsp": {
-			Label:   "tqsp",
-			Private: false,
-			GetPage: alf.GetTQSPPage,
-		},
 	}
 
 	labels := make([]string, len(labelFeeds))
@@ -137,39 +132,6 @@ func (f *Feed) GetMPLSPage(ctx context.Context, userDID string, limit int64, cur
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting posts from DB for feed (%s): %w", "mpls", err)
-	}
-
-	feedPosts := []*appbsky.FeedDefs_SkeletonFeedPost{}
-	newCursor := ""
-	for _, post := range posts {
-		postAtURL := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", post.ActorDid, post.Rkey)
-		feedPosts = append(feedPosts, &appbsky.FeedDefs_SkeletonFeedPost{
-			Post: postAtURL,
-		})
-		newCursor = post.Rkey
-	}
-
-	if int64(len(posts)) < limit {
-		return feedPosts, nil, nil
-	}
-
-	return feedPosts, &newCursor, nil
-}
-
-func (f *Feed) GetTQSPPage(ctx context.Context, userDID string, limit int64, cursor string) ([]*appbsky.FeedDefs_SkeletonFeedPost, *string, error) {
-	ctx, span := tracer.Start(ctx, "GetTQSPPage")
-	defer span.End()
-
-	if cursor == "" {
-		cursor = "~"
-	}
-
-	posts, err := f.Store.Queries.ListTQSP(ctx, store_queries.ListTQSPParams{
-		Rkey:  cursor,
-		Limit: int32(limit),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("error getting posts from DB for feed (%s): %w", "tqsp", err)
 	}
 
 	feedPosts := []*appbsky.FeedDefs_SkeletonFeedPost{}

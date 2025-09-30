@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"time"
 
@@ -38,18 +37,17 @@ type StatPercentile struct {
 }
 
 type AuthorStatsResponse struct {
-	TotalUsers          int              `json:"total_users"`
-	TotalPosts          int64            `json:"total_posts"`
-	TotalFollows        int64            `json:"total_follows"`
-	TotalLikes          int64            `json:"total_likes"`
-	FollowerPercentiles []StatPercentile `json:"follower_percentiles"`
-	UpdatedAt           time.Time        `json:"updated_at"`
-	DailyData           []DailyDatapoint `json:"daily_data"`
+	TotalUsers   int              `json:"total_users"`
+	TotalPosts   int64            `json:"total_posts"`
+	TotalFollows int64            `json:"total_follows"`
+	TotalLikes   int64            `json:"total_likes"`
+	UpdatedAt    time.Time        `json:"updated_at"`
+	DailyData    []DailyDatapoint `json:"daily_data"`
 }
 
-func (api *API) GetAuthorStats(c *gin.Context) {
+func (api *API) GetStats(c *gin.Context) {
 	ctx := c.Request.Context()
-	ctx, span := tracer.Start(ctx, "GetAuthorStats")
+	ctx, span := tracer.Start(ctx, "GetStats")
 	defer span.End()
 
 	timeout := 30 * time.Second
@@ -58,7 +56,7 @@ func (api *API) GetAuthorStats(c *gin.Context) {
 
 	// Wait for the stats cache to be populated
 	if api.StatsCache == nil {
-		span.AddEvent("GetAuthorStats:WaitForStatsCache")
+		span.AddEvent("GetStats:WaitForStatsCache")
 		for api.StatsCache == nil {
 			if timeWaited > timeout {
 				c.JSON(http.StatusRequestTimeout, gin.H{"error": "timed out waiting for stats cache to populate"})
@@ -71,14 +69,8 @@ func (api *API) GetAuthorStats(c *gin.Context) {
 	}
 
 	// Lock the stats mux for reading
-	span.AddEvent("GetAuthorStats:AcquireStatsCacheRLock")
 	api.StatsCacheRWMux.RLock()
-	span.AddEvent("GetAuthorStats:StatsCacheRLockAcquired")
-
 	statsFromCache := api.StatsCache.Stats
-
-	// Unlock the stats mux for reading
-	span.AddEvent("GetAuthorStats:ReleaseStatsCacheRLock")
 	api.StatsCacheRWMux.RUnlock()
 
 	c.JSON(http.StatusOK, statsFromCache)
@@ -127,151 +119,21 @@ func (api *API) RefreshSiteStats(ctx context.Context) error {
 		totalFollows += datapoint.FollowsPerDay
 	}
 
-	// Get Follower percentiles
-	followerPercentilesRaw, err := api.Store.Queries.GetFollowerPercentiles(ctx)
-	if err != nil {
-		log.Printf("Error getting follower percentiles: %v", err)
-		return fmt.Errorf("error getting follower percentiles: %w", err)
-	}
-
-	followerPercentiles := []StatPercentile{
-		{Percentile: 0.25, Value: followerPercentilesRaw.P25},
-		{Percentile: 0.5, Value: followerPercentilesRaw.P50},
-		{Percentile: 0.75, Value: followerPercentilesRaw.P75},
-		{Percentile: 0.9, Value: followerPercentilesRaw.P90},
-		{Percentile: 0.95, Value: followerPercentilesRaw.P95},
-		{Percentile: 0.99, Value: followerPercentilesRaw.P99},
-		{Percentile: 0.995, Value: followerPercentilesRaw.P995},
-		{Percentile: 0.997, Value: followerPercentilesRaw.P997},
-		{Percentile: 0.999, Value: followerPercentilesRaw.P999},
-		{Percentile: 0.9999, Value: followerPercentilesRaw.P9999},
-	}
-
-	// Lock the stats mux for writing
-	span.AddEvent("RefreshSiteStats:AcquireStatsCacheWLock")
-	api.StatsCacheRWMux.Lock()
-	span.AddEvent("RefreshSiteStats:StatsCacheWLockAcquired")
-	// Update the plain old struct cache
-	api.StatsCache = &StatsCacheEntry{
+	newStats := StatsCacheEntry{
 		Stats: AuthorStatsResponse{
-			TotalUsers:          userCount,
-			TotalPosts:          totalPosts,
-			TotalFollows:        totalFollows,
-			TotalLikes:          totalLikes,
-			FollowerPercentiles: followerPercentiles,
-			DailyData:           dailyDatapoints,
-			UpdatedAt:           time.Now(),
+			TotalUsers:   userCount,
+			TotalPosts:   totalPosts,
+			TotalFollows: totalFollows,
+			TotalLikes:   totalLikes,
+			DailyData:    dailyDatapoints,
+			UpdatedAt:    time.Now(),
 		},
 		Expiration: time.Now().Add(api.StatsCacheTTL),
 	}
 
-	// Unlock the stats mux for writing
-	span.AddEvent("RefreshSiteStats:ReleaseStatsCacheWLock")
+	api.StatsCacheRWMux.Lock()
+	api.StatsCache = &newStats
 	api.StatsCacheRWMux.Unlock()
 
 	return nil
-}
-
-type StatsPeriod struct {
-	LookbackWindow  string `json:"lookback_window"`
-	UniqueLikers    int64  `json:"unique_likers"`
-	UniquePosters   int64  `json:"unique_posters"`
-	UniqueReposters int64  `json:"unique_reposters"`
-	UniqueBlockers  int64  `json:"unique_blockers"`
-	UniqueFollowers int64  `json:"unique_followers"`
-	TotalUniques    int64  `json:"total_uniques"`
-}
-
-func (api *API) GetStatsPeriod(c *gin.Context) {
-	ctx := c.Request.Context()
-	ctx, span := tracer.Start(ctx, "GetStatsPeriod")
-	defer span.End()
-
-	var err error
-	lookbackHours := 24 * 30
-	lookbackWindow := 30 * 24 * time.Hour
-	lookbackWindowStr := c.Query("lookback_window")
-	if lookbackWindowStr != "" {
-		lookbackWindow, err = time.ParseDuration(lookbackWindowStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid lookback_window"})
-			return
-		}
-		lookbackHours = int(math.Ceil(lookbackWindow.Hours()))
-	}
-
-	likeKeys := []string{}
-	postKeys := []string{}
-	repostKeys := []string{}
-	blockKeys := []string{}
-	followKeys := []string{}
-	allKeys := []string{}
-	for i := 0; i < lookbackHours; i++ {
-		hourSuffix := time.Now().Add(-time.Duration(i) * time.Hour).Format("2006_01_02_15")
-		likeKeys = append(likeKeys, fmt.Sprintf("likes_hourly:%s", hourSuffix))
-		postKeys = append(postKeys, fmt.Sprintf("posts_hourly:%s", hourSuffix))
-		repostKeys = append(repostKeys, fmt.Sprintf("reposts_hourly:%s", hourSuffix))
-		blockKeys = append(blockKeys, fmt.Sprintf("blocks_hourly:%s", hourSuffix))
-		followKeys = append(followKeys, fmt.Sprintf("follows_hourly:%s", hourSuffix))
-		allKeys = append(allKeys, likeKeys[i], postKeys[i], repostKeys[i], blockKeys[i], followKeys[i])
-	}
-
-	// Get the union of all the hourly likers bitmaps
-	likersBM, err := api.Bitmapper.GetUnion(ctx, likeKeys)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get monthly likers count"})
-		return
-	}
-
-	// Get the union of all the hourly posters bitmaps
-	postsBM, err := api.Bitmapper.GetUnion(ctx, postKeys)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get monthly posters count"})
-		return
-	}
-
-	// Get the union of all the hourly reposters bitmaps
-	repostsBM, err := api.Bitmapper.GetUnion(ctx, repostKeys)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get monthly reposters count"})
-		return
-	}
-
-	// Get the union of all the hourly blockers bitmaps
-	blocksBM, err := api.Bitmapper.GetUnion(ctx, blockKeys)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get monthly blockers count"})
-		return
-	}
-
-	// Get the union of all the hourly followers bitmaps
-	followsBM, err := api.Bitmapper.GetUnion(ctx, followKeys)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get monthly followers count"})
-		return
-	}
-
-	// Get the total number of unique users
-	totalUniquesBM, err := api.Bitmapper.GetUnion(ctx, allKeys)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get total uniques count"})
-		return
-	}
-
-	uniqueLikers := int64(likersBM.GetCardinality())
-	uniquePosters := int64(postsBM.GetCardinality())
-	uniqueReposters := int64(repostsBM.GetCardinality())
-	uniqueBlockers := int64(blocksBM.GetCardinality())
-	uniqueFollowers := int64(followsBM.GetCardinality())
-	totalUniques := int64(totalUniquesBM.GetCardinality())
-
-	c.JSON(http.StatusOK, StatsPeriod{
-		LookbackWindow:  lookbackWindow.String(),
-		UniqueLikers:    uniqueLikers,
-		UniquePosters:   uniquePosters,
-		UniqueReposters: uniqueReposters,
-		UniqueBlockers:  uniqueBlockers,
-		UniqueFollowers: uniqueFollowers,
-		TotalUniques:    totalUniques,
-	})
 }

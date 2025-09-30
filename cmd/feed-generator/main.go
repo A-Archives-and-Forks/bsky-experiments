@@ -17,20 +17,13 @@ import (
 	feedgenerator "github.com/jazware/bsky-experiments/pkg/feed-generator"
 	"github.com/jazware/bsky-experiments/pkg/feed-generator/endpoints"
 	"github.com/jazware/bsky-experiments/pkg/feeds/authorlabel"
-	"github.com/jazware/bsky-experiments/pkg/feeds/bangers"
-	"github.com/jazware/bsky-experiments/pkg/feeds/firehose"
-	"github.com/jazware/bsky-experiments/pkg/feeds/followers"
-	"github.com/jazware/bsky-experiments/pkg/feeds/hot"
-	"github.com/jazware/bsky-experiments/pkg/feeds/language"
 	"github.com/jazware/bsky-experiments/pkg/feeds/pins"
-	"github.com/jazware/bsky-experiments/pkg/feeds/postlabel"
-	"github.com/jazware/bsky-experiments/pkg/graphd/client"
+	"github.com/jazware/bsky-experiments/pkg/feeds/static"
 	"github.com/jazware/bsky-experiments/pkg/tracing"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/urfave/cli/v2"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
 )
 
@@ -170,11 +163,6 @@ func FeedGenerator(cctx *cli.Context) error {
 		log.Fatalf("failed to connect to redis: %+v\n", err)
 	}
 
-	h := http.Client{
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
-	}
-	graphdClient := client.NewClient(cctx.String("graphd-root"), &h)
-
 	feedActorDID := cctx.String("feed-actor-did")
 
 	// Set the acceptable DIDs for the feed generator to respond to
@@ -201,20 +189,44 @@ func FeedGenerator(cctx *cli.Context) error {
 	}
 
 	// Create a language feed
-	log.Print("initializing language feed")
-	languageFeed, languageFeedAliases, err := language.NewFeed(ctx, feedActorDID, store)
-	if err != nil {
-		log.Fatalf("Failed to create LanguageFeed: %v", err)
-	}
-	feedGenerator.AddFeed(languageFeedAliases, languageFeed)
+	// log.Print("initializing language feed")
+	// languageFeed, languageFeedAliases, err := language.NewFeed(ctx, feedActorDID, store)
+	// if err != nil {
+	// 	log.Fatalf("Failed to create LanguageFeed: %v", err)
+	// }
+	// feedGenerator.AddFeed(languageFeedAliases, languageFeed)
 
 	// Create a postlabel feed
-	log.Print("initializing postlabel feed")
-	postLabelFeed, postLabelFeedAliases, err := postlabel.NewFeed(ctx, feedActorDID, store)
-	if err != nil {
-		log.Fatalf("Failed to create PostLabelFeed: %v", err)
-	}
-	feedGenerator.AddFeed(postLabelFeedAliases, postLabelFeed)
+	// log.Print("initializing postlabel feed")
+	// postLabelFeed, postLabelFeedAliases, err := postlabel.NewFeed(ctx, feedActorDID, store)
+	// if err != nil {
+	// 	log.Fatalf("Failed to create PostLabelFeed: %v", err)
+	// }
+	// feedGenerator.AddFeed(postLabelFeedAliases, postLabelFeed)
+
+	// Create a firehose feed
+	// log.Print("initializing firehose feed")
+	// firehoseFeed, firehoseFeedAliases, err := firehose.NewFeed(ctx, feedActorDID, store)
+	// if err != nil {
+	// 	log.Fatalf("Failed to create FirehoseFeed: %v", err)
+	// }
+	// feedGenerator.AddFeed(firehoseFeedAliases, firehoseFeed)
+
+	// Create a Bangers feed
+	// log.Print("initializing bangers feed")
+	// bangersFeed, bangersFeedAliases, err := bangers.NewFeed(ctx, feedActorDID, store, redisClient)
+	// if err != nil {
+	// 	log.Fatalf("Failed to create BangersFeed: %v", err)
+	// }
+	// feedGenerator.AddFeed(bangersFeedAliases, bangersFeed)
+
+	// Create a What's Hot feed
+	// log.Print("initializing hot feed")
+	// hotFeed, hotFeedAliases, err := hot.NewFeed(ctx, feedActorDID, store, redisClient)
+	// if err != nil {
+	// 	log.Fatalf("Failed to create HotFeed: %v", err)
+	// }
+	// feedGenerator.AddFeed(hotFeedAliases, hotFeed)
 
 	// Create an authorlabel feed
 	log.Print("initializing authorlabel feed")
@@ -224,30 +236,6 @@ func FeedGenerator(cctx *cli.Context) error {
 	}
 	feedGenerator.AddFeed(authorLabelFeedAliases, authorLabelFeed)
 
-	// Create a firehose feed
-	log.Print("initializing firehose feed")
-	firehoseFeed, firehoseFeedAliases, err := firehose.NewFeed(ctx, feedActorDID, store)
-	if err != nil {
-		log.Fatalf("Failed to create FirehoseFeed: %v", err)
-	}
-	feedGenerator.AddFeed(firehoseFeedAliases, firehoseFeed)
-
-	// Create a Bangers feed
-	log.Print("initializing bangers feed")
-	bangersFeed, bangersFeedAliases, err := bangers.NewFeed(ctx, feedActorDID, store, redisClient)
-	if err != nil {
-		log.Fatalf("Failed to create BangersFeed: %v", err)
-	}
-	feedGenerator.AddFeed(bangersFeedAliases, bangersFeed)
-
-	// Create a What's Hot feed
-	log.Print("initializing hot feed")
-	hotFeed, hotFeedAliases, err := hot.NewFeed(ctx, feedActorDID, store, redisClient)
-	if err != nil {
-		log.Fatalf("Failed to create HotFeed: %v", err)
-	}
-	feedGenerator.AddFeed(hotFeedAliases, hotFeed)
-
 	// Create a My Pins feed
 	log.Print("initializing pins feed")
 	pinsFeed, pinsFeedAliases, err := pins.NewFeed(ctx, feedActorDID, store)
@@ -256,16 +244,13 @@ func FeedGenerator(cctx *cli.Context) error {
 	}
 	feedGenerator.AddFeed(pinsFeedAliases, pinsFeed)
 
-	shardNodes := cctx.StringSlice("shard-db-nodes")
-	if len(shardNodes) > 0 {
-		// Create Experimental Followers feed
-		log.Print("initializing followers feed")
-		followersFeed, followersFeedAliases, err := followers.NewFeed(ctx, feedActorDID, graphdClient, redisClient, shardNodes, store)
-		if err != nil {
-			log.Fatalf("Failed to create FollowersExpFeed: %v", err)
-		}
-		feedGenerator.AddFeed(followersFeedAliases, followersFeed)
+	// Static Feed
+	log.Print("initializing static feed")
+	staticFeed, staticFeedAliases, err := static.NewFeed(ctx, feedActorDID, store, redisClient)
+	if err != nil {
+		log.Fatalf("Failed to create StaticFeed: %v", err)
 	}
+	feedGenerator.AddFeed(staticFeedAliases, staticFeed)
 
 	router := gin.New()
 

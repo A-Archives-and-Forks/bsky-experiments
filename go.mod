@@ -19,6 +19,7 @@ require (
 	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.1
+	github.com/grafov/m3u8 v0.12.1
 	github.com/hashicorp/golang-lru/arc/v2 v2.0.6
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/ipfs/go-cid v0.4.1
@@ -36,6 +37,7 @@ require (
 	github.com/prometheus/client_golang v1.19.1
 	github.com/redis/go-redis/extra/redisotel/v9 v9.0.5
 	github.com/redis/go-redis/v9 v9.3.0
+	github.com/rs/xid v1.6.0
 	github.com/sqlc-dev/pqtype v0.2.0
 	github.com/urfave/cli/v2 v2.26.0
 	github.com/whyrusleeping/cbor-gen v0.2.1-0.20241030202151-b7a6831be65e
@@ -57,10 +59,7 @@ require (
 	gorm.io/gorm v1.25.9
 )
 
-require (
-	github.com/RussellLuo/slidingwindow v0.0.0-20200528002341-535bb99d338b // indirect
-	github.com/kamstrup/intmap v0.5.1 // indirect
-)
+require github.com/kamstrup/intmap v0.5.1 // indirect
 
 require (
 	github.com/PuerkitoBio/goquery v1.8.0 // indirect

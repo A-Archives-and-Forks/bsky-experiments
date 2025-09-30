@@ -191,7 +191,7 @@ func main() {
 	p := ginprometheus.NewPrometheus("gin", nil)
 	p.Use(router)
 
-	router.GET("/stats", api.GetAuthorStats)
+	router.GET("/stats", api.GetStats)
 	router.GET("/redir", api.RedirectAtURI)
 
 	router.GET("/actors/type_ahead", api.SearchActorTypeAhead)
@@ -202,9 +202,6 @@ func main() {
 	router.POST("/repo/cleanup", api.CleanupOldRecords)
 	router.DELETE("/repo/cleanup", api.CancelCleanupJob)
 	router.GET("/repo/cleanup/stats", api.GetCleanupStats)
-
-	// Bitmappy stuff
-	router.GET("/stats/period", api.GetStatsPeriod)
 
 	go api.RunCleanupDaemon(ctx)
 
