@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,7 +46,7 @@ type NotFoundError struct {
 	error
 }
 
-var supportedFeeds = []string{"whats-hot", "wh-ja", "wh-ja-txt", "top-1h", "top-24h"}
+var supportedFeeds = []string{"whats-hot", "top-1h", "top-24h"}
 
 var tracer = otel.Tracer("hot-feed")
 
@@ -84,17 +83,14 @@ func NewFeed(ctx context.Context, feedActorDID string, store *store.Store, redis
 			t := time.NewTicker(hotCacheTTL)
 			logger := slog.With("source", "whats-hot-refresh")
 			defer t.Stop()
-			for {
-				select {
-				case <-t.C:
-					ctx := context.Background()
-					logger.Info("refreshing cache")
-					_, err := f.fetchAndCacheHotPosts(ctx)
-					if err != nil {
-						logger.Error("error refreshing cache", "error", err)
-					}
-					logger.Info("cache refreshed")
+			for range t.C {
+				ctx := context.Background()
+				logger.Info("refreshing cache")
+				_, err := f.fetchAndCacheHotPosts(ctx)
+				if err != nil {
+					logger.Error("error refreshing cache", "error", err)
 				}
+				logger.Info("cache refreshed")
 			}
 		}()
 
@@ -103,17 +99,14 @@ func NewFeed(ctx context.Context, feedActorDID string, store *store.Store, redis
 				t := time.NewTicker(topCacheTTLs[hours])
 				logger := slog.With("source", fmt.Sprintf("top-%dh-refresh", hours))
 				defer t.Stop()
-				for {
-					select {
-					case <-t.C:
-						ctx := context.Background()
-						logger.Info("refreshing cache")
-						_, err := f.fetchAndCacheTopPosts(ctx, hours)
-						if err != nil {
-							logger.Error("error refreshing cache", "error", err)
-						}
-						logger.Info("cache refreshed")
+				for range t.C {
+					ctx := context.Background()
+					logger.Info("refreshing cache")
+					_, err := f.fetchAndCacheTopPosts(ctx, hours)
+					if err != nil {
+						logger.Error("error refreshing cache", "error", err)
 					}
+					logger.Info("cache refreshed")
 				}
 			}(hours, key)
 		}
@@ -236,17 +229,6 @@ func (f *Feed) GetPage(ctx context.Context, feed string, userDID string, limit i
 		}
 	}
 
-	lang := ""
-	if strings.HasPrefix(feed, "wh-") {
-		lang = strings.TrimPrefix(feed, "wh-")
-		lang = strings.TrimSuffix(lang, "-txt")
-	}
-
-	textOnly := false
-	if strings.HasSuffix(feed, "-txt") {
-		textOnly = true
-	}
-
 	key := hotCacheKey
 	if strings.HasPrefix(feed, "top-") {
 		hours, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(feed, "top-"), "h"))
@@ -271,26 +253,7 @@ func (f *Feed) GetPage(ctx context.Context, feed string, userDID string, limit i
 	}
 
 	postsSeen := int64(len(posts))
-
-	// If the feed is a language feed, filter out posts that don't match the language
 	lastPostAdded := int(offset) + len(posts) - 1
-	if lang != "" {
-		filteredPosts := []postRef{}
-		for i, post := range posts {
-			if textOnly && post.HasMedia {
-				continue
-			}
-
-			if slices.Contains(post.Langs, lang) {
-				filteredPosts = append(filteredPosts, post)
-				lastPostAdded = int(offset) + i
-				if int64(len(filteredPosts)) >= limit {
-					break
-				}
-			}
-		}
-		posts = filteredPosts
-	}
 
 	feedPosts := make([]*appbsky.FeedDefs_SkeletonFeedPost, len(posts))
 	for i, post := range posts {

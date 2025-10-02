@@ -17,6 +17,7 @@ import (
 	feedgenerator "github.com/jazware/bsky-experiments/pkg/feed-generator"
 	"github.com/jazware/bsky-experiments/pkg/feed-generator/endpoints"
 	"github.com/jazware/bsky-experiments/pkg/feeds/authorlabel"
+	"github.com/jazware/bsky-experiments/pkg/feeds/hot"
 	"github.com/jazware/bsky-experiments/pkg/feeds/pins"
 	"github.com/jazware/bsky-experiments/pkg/feeds/static"
 	"github.com/jazware/bsky-experiments/pkg/tracing"
@@ -221,12 +222,12 @@ func FeedGenerator(cctx *cli.Context) error {
 	// feedGenerator.AddFeed(bangersFeedAliases, bangersFeed)
 
 	// Create a What's Hot feed
-	// log.Print("initializing hot feed")
-	// hotFeed, hotFeedAliases, err := hot.NewFeed(ctx, feedActorDID, store, redisClient)
-	// if err != nil {
-	// 	log.Fatalf("Failed to create HotFeed: %v", err)
-	// }
-	// feedGenerator.AddFeed(hotFeedAliases, hotFeed)
+	log.Print("initializing hot feed")
+	hotFeed, hotFeedAliases, err := hot.NewFeed(ctx, feedActorDID, store, redisClient)
+	if err != nil {
+		log.Fatalf("Failed to create HotFeed: %v", err)
+	}
+	feedGenerator.AddFeed(hotFeedAliases, hotFeed)
 
 	// Create an authorlabel feed
 	log.Print("initializing authorlabel feed")

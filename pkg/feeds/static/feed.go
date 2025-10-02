@@ -22,7 +22,6 @@ func NewFeed(ctx context.Context, feedActorDID string, store *store.Store, redis
 	keys := []string{
 		"bangers",
 		"at-bangers",
-		"cl-tqsp",
 		"my-followers-ex",
 		"my-followers",
 		"cv:cat",
@@ -30,11 +29,8 @@ func NewFeed(ctx context.Context, feedActorDID string, store *store.Store, redis
 		"cv:bird",
 		"cl-japanese",
 		"cl-brasil",
-		"whats-hot",
 		"wh-ja",
 		"wh-ja-txt",
-		"top-1h",
-		"top-24h",
 		"firehose",
 	}
 	return &Feed{
