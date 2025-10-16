@@ -1,12 +1,10 @@
 package endpoints
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/bluesky-social/indigo/atproto/identity"
-	"github.com/jazware/bsky-experiments/pkg/consumer"
 	"github.com/jazware/bsky-experiments/pkg/consumer/store"
 	statsqueries "github.com/jazware/bsky-experiments/pkg/stats/stats_queries"
 	"github.com/jazware/bsky-experiments/pkg/usercount"
@@ -27,8 +25,6 @@ type API struct {
 
 	CheckoutLimiter *rate.Limiter
 	MagicHeaderVal  string
-
-	Bitmapper *consumer.Bitmapper
 }
 
 var tracer = otel.Tracer("search-api")
@@ -42,11 +38,6 @@ func NewAPI(
 ) (*API, error) {
 	dir := identity.DefaultDirectory()
 
-	bitmapper, err := consumer.NewBitmapper(store)
-	if err != nil {
-		return nil, fmt.Errorf("error initializing bitmapper: %w", err)
-	}
-
 	return &API{
 		UserCount:       userCount,
 		Stats:           stats,
@@ -56,6 +47,5 @@ func NewAPI(
 		StatsCacheTTL:   statsCacheTTL,
 		StatsCacheRWMux: &sync.RWMutex{},
 		CheckoutLimiter: rate.NewLimiter(rate.Every(2*time.Second), 1),
-		Bitmapper:       bitmapper,
 	}, nil
 }

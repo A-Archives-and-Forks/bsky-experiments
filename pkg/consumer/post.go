@@ -350,15 +350,6 @@ func (c *Consumer) HandleCreatePost(ctx context.Context, repo, rkey string, inde
 			log.Errorf("failed to insert post into sharddb: %+v", err)
 		}
 	}
-
-	// Track the user in the posters bitmap
-	// hourlyPostBMKey := fmt.Sprintf("posts_hourly:%s", recCreatedAt.Format("2006_01_02_15"))
-
-	// err = c.bitmapper.AddMember(ctx, hourlyPostBMKey, repo)
-	// if err != nil {
-	// 	log.Errorf("failed to add member to posters bitmap: %+v", err)
-	// }
-
 	return nil
 }
 

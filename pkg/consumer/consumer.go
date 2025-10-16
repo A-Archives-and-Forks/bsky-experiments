@@ -47,8 +47,6 @@ type Consumer struct {
 	followerCountQueue chan *followerCountPayload
 	likeCountQueue     chan *likeCountPayload
 
-	bitmapper *Bitmapper
-
 	colCache  *lru.Cache[string, int64]
 	subjCache *lru.Cache[string, int64]
 
@@ -100,7 +98,6 @@ type Delete struct {
 var tracer = otel.Tracer("consumer")
 
 func (c *Consumer) Shutdown() error {
-	// return c.bitmapper.Shutdown()
 	return nil
 }
 
@@ -223,18 +220,6 @@ func NewConsumer(
 	go c.runFollowCountIndexer(ctx)
 	// Run a like count indexer
 	go c.runLikeCountIndexer(ctx)
-
-	// if graphdRoot != "" {
-	// 	c.graphdClient = graphdclient.NewClient(graphdRoot, &h)
-	// }
-
-	// Create a Bitmapper
-	bitmapper, err := NewBitmapper(store)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bitmapper: %+v", err)
-	}
-
-	c.bitmapper = bitmapper
 
 	// Check to see if the cursor exists in redis
 	err = c.ReadCursor(context.Background())
@@ -991,14 +976,6 @@ func (c *Consumer) HandleCreateRecord(
 			SubjectURI: like.Subject.Uri,
 			Count:      1,
 		}
-
-		// Track the user in the likers bitmap
-		// hourlyLikeBMKey := fmt.Sprintf("likes_hourly:%s", recCreatedAt.Format("2006_01_02_15"))
-
-		// err = c.bitmapper.AddMember(ctx, hourlyLikeBMKey, repo)
-		// if err != nil {
-		// 	log.Errorf("failed to add member to likers bitmap: %+v", err)
-		// }
 	case "app.bsky.feed.repost":
 		span.SetAttributes(attribute.String("record_type", "feed_repost"))
 		recordsProcessedCounter.WithLabelValues("feed_repost", c.SocketURL).Inc()
@@ -1066,14 +1043,6 @@ func (c *Consumer) HandleCreateRecord(
 				log.Errorf("failed to propagate follow to GraphD: %+v", err)
 			}
 		}
-
-		// Track the user in the followers bitmap
-		// hourlyFollowsBMKey := fmt.Sprintf("follows_hourly:%s", recCreatedAt.Format("2006_01_02_15"))
-
-		// err = c.bitmapper.AddMember(ctx, hourlyFollowsBMKey, repo)
-		// if err != nil {
-		// 	log.Errorf("failed to add member to followers bitmap: %+v", err)
-		// }
 	case "app.bsky.actor.profile":
 		span.SetAttributes(attribute.String("record_type", "actor_profile"))
 		recordsProcessedCounter.WithLabelValues("actor_profile", c.SocketURL).Inc()
