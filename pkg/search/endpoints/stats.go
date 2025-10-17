@@ -46,8 +46,7 @@ type AuthorStatsResponse struct {
 }
 
 func (api *API) GetStats(c *gin.Context) {
-	ctx := c.Request.Context()
-	ctx, span := tracer.Start(ctx, "GetStats")
+	_, span := tracer.Start(c.Request.Context(), "GetStats")
 	defer span.End()
 
 	timeout := 30 * time.Second
