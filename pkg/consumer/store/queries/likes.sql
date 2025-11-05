@@ -21,3 +21,7 @@ FROM likes l
 WHERE l.actor_uid = $1
     AND l.rkey = $2
 LIMIT 1;
+-- name: TrimLikes :execrows
+DELETE FROM likes
+WHERE created_at < NOW() - make_interval(hours := $1)
+    OR created_at > NOW() + make_interval(mins := 15);

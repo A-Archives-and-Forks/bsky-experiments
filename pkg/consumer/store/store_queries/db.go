@@ -489,6 +489,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.refreshStatsForDayStmt, err = db.PrepareContext(ctx, refreshStatsForDay); err != nil {
 		return nil, fmt.Errorf("error preparing query RefreshStatsForDay: %w", err)
 	}
+	if q.trimLikesStmt, err = db.PrepareContext(ctx, trimLikes); err != nil {
+		return nil, fmt.Errorf("error preparing query TrimLikes: %w", err)
+	}
 	if q.trimMPLSStmt, err = db.PrepareContext(ctx, trimMPLS); err != nil {
 		return nil, fmt.Errorf("error preparing query TrimMPLS: %w", err)
 	}
@@ -1305,6 +1308,11 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing refreshStatsForDayStmt: %w", cerr)
 		}
 	}
+	if q.trimLikesStmt != nil {
+		if cerr := q.trimLikesStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing trimLikesStmt: %w", cerr)
+		}
+	}
 	if q.trimMPLSStmt != nil {
 		if cerr := q.trimMPLSStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing trimMPLSStmt: %w", cerr)
@@ -1559,6 +1567,7 @@ type Queries struct {
 	listRecentPostsByLabelHotStmt             *sql.Stmt
 	listTQSPStmt                              *sql.Stmt
 	refreshStatsForDayStmt                    *sql.Stmt
+	trimLikesStmt                             *sql.Stmt
 	trimMPLSStmt                              *sql.Stmt
 	trimOldRecentPostsStmt                    *sql.Stmt
 	trimRecentPostLabelsStmt                  *sql.Stmt
@@ -1732,6 +1741,7 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		listRecentPostsByLabelHotStmt:             q.listRecentPostsByLabelHotStmt,
 		listTQSPStmt:                              q.listTQSPStmt,
 		refreshStatsForDayStmt:                    q.refreshStatsForDayStmt,
+		trimLikesStmt:                             q.trimLikesStmt,
 		trimMPLSStmt:                              q.trimMPLSStmt,
 		trimOldRecentPostsStmt:                    q.trimOldRecentPostsStmt,
 		trimRecentPostLabelsStmt:                  q.trimRecentPostLabelsStmt,

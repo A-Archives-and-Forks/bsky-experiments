@@ -524,6 +524,8 @@ func (c *Consumer) TrimRecentPosts(ctx context.Context, maxAge time.Duration) er
 	}
 	span.SetAttributes(attribute.Int64("num_deleted", numDeleted))
 
+	postsTrimmed.WithLabelValues(c.SocketURL).Add(float64(numDeleted))
+
 	// Trim the label feeds
 	oldestRkey := syntax.NewTIDFromTime(time.Now().Add(-maxAge*2), 0).String()
 	err = c.Store.Queries.TrimMPLS(ctx, oldestRkey)
@@ -539,9 +541,19 @@ func (c *Consumer) TrimRecentPosts(ctx context.Context, maxAge time.Duration) er
 		c.Logger.Error("failed to trim recent post labels", "error", err)
 	}
 
-	postsTrimmed.WithLabelValues(c.SocketURL).Add(float64(numDeleted))
+	// Trim old likes
+	numLikesDeleted, err := c.Store.Queries.TrimLikes(ctx, int32(maxAge.Hours()))
+	if err != nil {
+		c.Logger.Error("failed to trim likes", "error", err)
+	}
+	likesTrimmed.WithLabelValues(c.SocketURL).Add(float64(numLikesDeleted))
 
-	c.Logger.Infow("trimmed recent posts", "num_deleted", numDeleted, "duration", time.Since(start).Seconds())
+	c.Logger.Infow(
+		"trimmed recent posts",
+		"num_posts_deleted", numDeleted,
+		"num_likes_deleted", numLikesDeleted,
+		"duration", time.Since(start).Seconds(),
+	)
 
 	return nil
 }

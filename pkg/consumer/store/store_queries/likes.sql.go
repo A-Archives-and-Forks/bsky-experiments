@@ -98,3 +98,17 @@ func (q *Queries) GetLike(ctx context.Context, arg GetLikeParams) (GetLikeRow, e
 	)
 	return i, err
 }
+
+const trimLikes = `-- name: TrimLikes :execrows
+DELETE FROM likes
+WHERE created_at < NOW() - make_interval(hours := $1)
+    OR created_at > NOW() + make_interval(mins := 15)
+`
+
+func (q *Queries) TrimLikes(ctx context.Context, hours int32) (int64, error) {
+	result, err := q.exec(ctx, q.trimLikesStmt, trimLikes, hours)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

@@ -118,3 +118,8 @@ var postsTrimmed = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "consumer_posts_trimmed_total",
 	Help: "The total number of posts trimmed",
 }, []string{"socket_url"})
+
+var likesTrimmed = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "consumer_likes_trimmed_total",
+	Help: "The total number of likes trimmed",
+}, []string{"socket_url"})
