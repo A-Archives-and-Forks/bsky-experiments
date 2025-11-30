@@ -11,7 +11,6 @@ import (
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
-	"github.com/jazware/bsky-experiments/pkg/sharddb"
 
 	"github.com/goccy/go-json"
 	"github.com/sqlc-dev/pqtype"
@@ -34,7 +33,7 @@ func (c *Consumer) HandleCreatePost(ctx context.Context, repo, rkey string, inde
 	}
 
 	// Skip posts with a TID that's more than a minute in the future
-	if tid.Time().Sub(time.Now()) > time.Minute {
+	if time.Until(tid.Time()) > time.Minute {
 		log.Warn("post rkey TID was too far in the future, skipping processing", "err", err)
 		return nil
 	}
@@ -317,38 +316,6 @@ func (c *Consumer) HandleCreatePost(ctx context.Context, repo, rkey string, inde
 	})
 	if err != nil {
 		log.Errorf("failed to create like count: %+v", err)
-	}
-
-	if c.shardDB != nil && !wasBackfilled {
-		bucket, err := sharddb.GetBucketFromRKey(rkey)
-		if err != nil {
-			log.Errorf("failed to get bucket from rkey %q: %+v", rkey, err)
-			return nil
-		}
-
-		recBytes, err := json.Marshal(rec)
-		if err != nil {
-			log.Errorf("failed to marshal record for insertion to sharddb: %+v", err)
-			return nil
-		}
-
-		// Create Post in ShardDB
-		shardDBPost := sharddb.Post{
-			ActorDID:  repo,
-			Rkey:      rkey,
-			IndexedAt: indexedAt,
-			Bucket:    bucket,
-			Raw:       recBytes,
-			Langs:     rec.Langs,
-			Tags:      rec.Tags,
-			HasMedia:  hasMedia,
-			IsReply:   rec.Reply != nil,
-		}
-
-		err = c.shardDB.InsertPost(ctx, shardDBPost)
-		if err != nil {
-			log.Errorf("failed to insert post into sharddb: %+v", err)
-		}
 	}
 	return nil
 }

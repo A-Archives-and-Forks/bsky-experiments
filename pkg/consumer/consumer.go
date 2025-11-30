@@ -18,8 +18,6 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jazware/bsky-experiments/pkg/consumer/store"
 	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
-	graphdclient "github.com/jazware/bsky-experiments/pkg/graphd/client"
-	"github.com/jazware/bsky-experiments/pkg/sharddb"
 	"github.com/kwertop/gostatix"
 	"github.com/labstack/gommon/log"
 	"github.com/redis/go-redis/v9"
@@ -40,9 +38,6 @@ type Consumer struct {
 	ProgressKey string
 
 	Store *store.Store
-
-	graphdClient *graphdclient.Client
-	shardDB      *sharddb.ShardDB
 
 	followerCountQueue chan *followerCountPayload
 	likeCountQueue     chan *likeCountPayload
@@ -157,28 +152,6 @@ func NewConsumer(
 	graphdRoot string,
 	shardDBNodes []string,
 ) (*Consumer, error) {
-	// h := http.Client{
-	// 	Transport: otelhttp.NewTransport(&http.Transport{
-	// 		MaxConnsPerHost:     100,
-	// 		MaxIdleConnsPerHost: 100,
-	// 	}),
-	// 	Timeout: time.Millisecond * 250,
-	// }
-
-	var shardDB *sharddb.ShardDB
-	var err error
-	// if len(shardDBNodes) > 0 {
-	// 	shardDB, err = sharddb.NewShardDB(ctx, shardDBNodes, slog.Default())
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("failed to create sharddb: %+v", err)
-	// 	}
-
-	// 	err := shardDB.CreatePostTable(ctx)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("failed to create post table: %+v", err)
-	// 	}
-	// }
-
 	colCache, err := lru.New[string, int64](100)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create colCache: %+v", err)
@@ -208,8 +181,6 @@ func NewConsumer(
 
 		colCache:  colCache,
 		subjCache: subjCache,
-
-		shardDB: shardDB,
 
 		topKOperations:    newTopK(),
 		topKFollowedUsers: newTopK(),
@@ -819,13 +790,6 @@ func (c *Consumer) HandleDeleteRecord(
 			return fmt.Errorf("can't delete follow: %w", err)
 		}
 
-		if c.graphdClient != nil {
-			err = c.graphdClient.Unfollow(ctx, repo, follow.TargetDid)
-			if err != nil {
-				log.Errorf("failed to propagate unfollow to GraphD: %w", err)
-			}
-		}
-
 		err = c.Store.Queries.DeleteFollow(ctx, store_queries.DeleteFollowParams{
 			ActorDid: repo,
 			Rkey:     rkey,
@@ -1047,13 +1011,6 @@ func (c *Consumer) HandleCreateRecord(
 		})
 		if err != nil {
 			log.Errorf("failed to increment following count: %+v", err)
-		}
-
-		if c.graphdClient != nil {
-			err = c.graphdClient.Follow(ctx, repo, follow.Subject)
-			if err != nil {
-				log.Errorf("failed to propagate follow to GraphD: %+v", err)
-			}
 		}
 	case "app.bsky.actor.profile":
 		span.SetAttributes(attribute.String("record_type", "actor_profile"))
