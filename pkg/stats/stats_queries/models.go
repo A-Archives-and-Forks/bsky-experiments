@@ -22,7 +22,7 @@ type DailyStatsSummary struct {
 }
 
 type HllDatum struct {
-	ID          int32     `json:"id"`
+	ID          int64     `json:"id"`
 	Summary     int64     `json:"summary"`
 	MetricName  string    `json:"metric_name"`
 	WindowStart time.Time `json:"window_start"`
@@ -34,7 +34,7 @@ type HllDatum struct {
 }
 
 type StatsCursor struct {
-	ID         int32     `json:"id"`
+	ID         int64     `json:"id"`
 	LastCursor int64     `json:"last_cursor"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }

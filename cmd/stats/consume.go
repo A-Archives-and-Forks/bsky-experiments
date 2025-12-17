@@ -335,7 +335,7 @@ func (c *Consumer) saveHLLs(ctx context.Context) error {
 			WindowStart: hll.windowStart,
 			WindowEnd:   hll.windowEnd,
 			DeleteAfter: hll.deleteAfter,
-		}); err != nil {
+		}); err != nil && !strings.Contains(err.Error(), "current transaction is aborted") {
 			c.logger.Error("failed to upsert HLL sketch", "key", key, "error", err)
 		}
 	}

@@ -15,7 +15,7 @@ CREATE INDEX daily_stats_summary_date ON daily_stats_summary (date);
 
 -- HyperLogLog Table for Approximate Distinct Counts stored as binary data
 CREATE TABLE hll_data (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     summary BIGINT DEFAULT 0 NOT NULL,
     metric_name TEXT NOT NULL,
     window_start TIMESTAMPTZ NOT NULL,
@@ -30,7 +30,7 @@ CREATE INDEX hll_data_delete_after ON hll_data (delete_after);
 
 -- Cursor table for tracking last processed event
 CREATE TABLE stats_cursors (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     last_cursor BIGINT NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
