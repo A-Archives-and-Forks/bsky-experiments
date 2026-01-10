@@ -7,22 +7,29 @@ import (
 	"strings"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
-func (api *API) RedirectAtURI(c *gin.Context) {
-	ctx := c.Request.Context()
+type RedirectRequest struct {
+	Q string `query:"q"`
+}
+
+func (api *API) RedirectAtURI(c echo.Context) error {
+	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "RedirectAtURI")
 	defer span.End()
 
-	query := c.Query("q")
+	var req RedirectRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	query := req.Q
 
 	if strings.HasPrefix(query, "https://") {
 		// Turn the bsky URL into an atURI
 		u, err := url.Parse(query)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("failed to parse url: %w", err).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("failed to parse url: %w", err).Error()})
 		}
 
 		// Profile: https://bsky.app/profile/{handle_or_did}
@@ -36,8 +43,7 @@ func (api *API) RedirectAtURI(c *gin.Context) {
 		parts := strings.Split(path, "/")
 
 		if len(parts) < 2 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("unsupported url: %s", query).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("unsupported url: %s", query).Error()})
 		}
 
 		var identString string
@@ -55,97 +61,83 @@ func (api *API) RedirectAtURI(c *gin.Context) {
 				case "lists":
 					collection = "app.bsky.graph.list"
 				default:
-					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("unsupported url: %s", query).Error()})
-					return
+					return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("unsupported url: %s", query).Error()})
 				}
 				recordKey = parts[3]
 			}
 		case "starter-pack":
 			if len(parts) < 3 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("unsupported url: %s", query).Error()})
-				return
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("unsupported url: %s", query).Error()})
 			}
 			identString = parts[1]
 			collection = "app.bsky.graph.starterpack"
 			recordKey = parts[2]
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("unsupported url: %s", query).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("unsupported url: %s", query).Error()})
 		}
 
 		identifier, err := syntax.ParseAtIdentifier(identString)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("failed to parse identifier: %w", err).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("failed to parse identifier: %w", err).Error()})
 		} else if identifier == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("invalid identifier: %s", identString).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("invalid identifier: %s", identString).Error()})
 		}
 
 		ident, err := api.Directory.Lookup(ctx, *identifier)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("failed to lookup identity: %w", err).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("failed to lookup identity: %w", err).Error()})
 		} else if ident == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Errorf("identity not found: %s", identifier.String()).Error()})
-			return
+			return c.JSON(http.StatusNotFound, map[string]string{"error": fmt.Errorf("identity not found: %s", identifier.String()).Error()})
 		}
 
 		ret := ident.DID.String()
 		if collection != "" && recordKey != "" {
 			ret = fmt.Sprintf("at://%s/%s/%s", ident.DID.String(), collection, recordKey)
 		}
-		c.String(http.StatusOK, ret)
-		return
+		return c.String(http.StatusOK, ret)
 	}
 
 	atURI, err := syntax.ParseATURI(query)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("failed to parse atUri: %w", err).Error()})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("failed to parse atUri: %w", err).Error()})
 	}
 
 	switch atURI.Collection() {
 	case "":
-		c.Redirect(http.StatusFound, fmt.Sprintf("https://bsky.app/profile/%s", atURI.Authority().String()))
-		return
+		return c.Redirect(http.StatusFound, fmt.Sprintf("https://bsky.app/profile/%s", atURI.Authority().String()))
 	case "app.bsky.feed.post":
-		c.Redirect(http.StatusFound,
+		return c.Redirect(http.StatusFound,
 			fmt.Sprintf(
 				"https://bsky.app/profile/%s/post/%s",
 				atURI.Authority().String(),
 				atURI.RecordKey().String(),
 			),
 		)
-		return
 	case "app.bsky.feed.generator":
-		c.Redirect(http.StatusFound,
+		return c.Redirect(http.StatusFound,
 			fmt.Sprintf(
 				"https://bsky.app/profile/%s/feed/%s",
 				atURI.Authority().String(),
 				atURI.RecordKey().String(),
 			),
 		)
-		return
 	case "app.bsky.graph.list":
-		c.Redirect(http.StatusFound,
+		return c.Redirect(http.StatusFound,
 			fmt.Sprintf(
 				"https://bsky.app/profile/%s/lists/%s",
 				atURI.Authority().String(),
 				atURI.RecordKey().String(),
 			),
 		)
-		return
 	case "app.bsky.graph.starterpack":
-		c.Redirect(http.StatusFound,
+		return c.Redirect(http.StatusFound,
 			fmt.Sprintf(
 				"https://bsky.app/starter-pack/%s/%s",
 				atURI.Authority().String(),
 				atURI.RecordKey().String(),
 			),
 		)
-		return
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("invalid atUri: %s", atURI.String()).Error()})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("invalid atUri: %s", atURI.String()).Error()})
 	}
 }

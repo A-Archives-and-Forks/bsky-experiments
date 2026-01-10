@@ -2,98 +2,77 @@ package main
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/jazware/bsky-experiments/pkg/consumer/store"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
-	objectdetection "github.com/jazware/bsky-experiments/pkg/object-detection"
-	"github.com/jazware/bsky-experiments/pkg/sentiment"
-	"github.com/jazware/bsky-experiments/pkg/tracing"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	jetstreamclient "github.com/bluesky-social/jetstream/pkg/client"
+	"github.com/bluesky-social/jetstream/pkg/client/schedulers/parallel"
+	"github.com/gorilla/websocket"
+	"github.com/jazware/bsky-experiments/pkg/indexer"
+	"github.com/jazware/bsky-experiments/pkg/indexer/store"
+	"github.com/jazware/bsky-experiments/telemetry"
+	"github.com/jazware/bsky-experiments/version"
+	"github.com/redis/go-redis/extra/redisotel/v9"
+	"github.com/redis/go-redis/v9"
 	"github.com/urfave/cli/v2"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.uber.org/atomic"
-	"golang.org/x/sync/semaphore"
 )
-
-type Index struct {
-	Detection *objectdetection.ObjectDetectionImpl
-	Sentiment *sentiment.Sentiment
-	Logger    *slog.Logger
-	Store     *store.Store
-
-	PositiveConfidenceThreshold float64
-	NegativeConfidenceThreshold float64
-}
 
 func main() {
 	app := cli.App{
 		Name:    "indexer",
-		Usage:   "atproto post indexer",
-		Version: "0.0.1",
+		Usage:   "atproto firehose indexer for ClickHouse",
+		Version: version.String(),
 	}
 
 	app.Flags = []cli.Flag{
-		&cli.IntFlag{
-			Name:    "post-page-size",
-			Usage:   "number of posts to index per page",
-			Value:   2000,
-			EnvVars: []string{"POST_PAGE_SIZE"},
-		},
-		&cli.IntFlag{
-			Name:    "image-page-size",
-			Usage:   "number of images to index per page",
-			Value:   60,
-			EnvVars: []string{"IMAGE_PAGE_SIZE"},
-		},
-		&cli.IntFlag{
-			Name:    "port",
-			Usage:   "port to serve metrics on",
-			Value:   8080,
-			EnvVars: []string{"PORT"},
-		},
-
+		telemetry.CLIFlagDebug,
+		telemetry.CLIFlagMetricsListenAddress,
+		telemetry.CLIFlagServiceName,
+		telemetry.CLIFlagTracingSampleRatio,
 		&cli.StringFlag{
-			Name:     "store-postgres-url",
-			Usage:    "postgres url for storing events",
-			Required: false,
-			EnvVars:  []string{"STORE_POSTGRES_URL"},
+			Name:    "ws-url",
+			Usage:   "full websocket path to the Jetstream subscription endpoint",
+			Value:   "wss://jetstream.atproto.tools/subscribe",
+			EnvVars: []string{"WS_URL"},
 		},
 		&cli.StringFlag{
-			Name:    "object-detection-service-host",
-			Usage:   "host for object detection service",
-			Value:   "localhost:8081",
-			EnvVars: []string{"OBJECT_DETECTION_SERVICE_HOST"},
+			Name:    "redis-address",
+			Usage:   "redis address for storing progress",
+			Value:   "localhost:6379",
+			EnvVars: []string{"REDIS_ADDRESS"},
 		},
 		&cli.StringFlag{
-			Name:    "sentiment-service-host",
-			Usage:   "host for sentiment service",
-			Value:   "localhost:8082",
-			EnvVars: []string{"SENTIMENT_SERVICE_HOST"},
+			Name:    "redis-prefix",
+			Usage:   "redis prefix for storing progress",
+			Value:   "indexer",
+			EnvVars: []string{"REDIS_PREFIX"},
 		},
-		&cli.Float64Flag{
-			Name:    "positive-confidence-threshold",
-			Usage:   "confidence threshold for positive sentiment",
-			Value:   0.65,
-			EnvVars: []string{"POSITIVE_CONFIDENCE_THRESHOLD"},
+		&cli.StringFlag{
+			Name:    "clickhouse-address",
+			Usage:   "clickhouse address for storing records",
+			Value:   "localhost:9000",
+			EnvVars: []string{"CLICKHOUSE_ADDRESS"},
 		},
-		&cli.Float64Flag{
-			Name:    "negative-confidence-threshold",
-			Usage:   "confidence threshold for negative sentiment",
-			Value:   0.65,
-			EnvVars: []string{"NEGATIVE_CONFIDENCE_THRESHOLD"},
+		&cli.StringFlag{
+			Name:    "clickhouse-username",
+			Usage:   "clickhouse username",
+			Value:   "default",
+			EnvVars: []string{"CLICKHOUSE_USERNAME"},
+		},
+		&cli.StringFlag{
+			Name:    "clickhouse-password",
+			Usage:   "clickhouse password",
+			Value:   "",
+			EnvVars: []string{"CLICKHOUSE_PASSWORD"},
 		},
 	}
 
@@ -101,280 +80,223 @@ func main() {
 
 	err := app.Run(os.Args)
 	if err != nil {
-		log.Fatalf("indexer exited with error: %+v", err)
+		log.Fatal(err)
 	}
 }
 
-var tracer = otel.Tracer("Indexer")
-
+// Indexer is the main function for the indexer
 func Indexer(cctx *cli.Context) error {
-	ctx := cctx.Context
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Trap SIGINT to trigger a shutdown.
+	// Create a channel that will be closed when we want to stop the application
+	kill := make(chan struct{})
+
+	// Trap SIGINT to trigger a shutdown
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+	logger := telemetry.StartLogger(cctx)
+	telemetry.StartMetrics(cctx)
 
-	logger.Info("Starting up BSky indexer...")
+	logger.Info("starting indexer",
+		"version", version.Version,
+		"commit", version.GitCommit)
+
+	u, err := url.Parse(cctx.String("ws-url"))
+	if err != nil {
+		return fmt.Errorf("failed to parse ws-url: %+v", err)
+	}
 
 	// Registers a tracer Provider globally if the exporter endpoint is set
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
 		logger.Info("initializing tracer...")
-		shutdown, err := tracing.InstallExportPipeline(cctx.Context, "Indexer", 1)
+		shutdown, err := telemetry.StartTracing(cctx)
 		if err != nil {
-			return fmt.Errorf("failed to initialize tracing: %w", err)
+			return fmt.Errorf("failed to start tracing: %+v", err)
 		}
 		defer func() {
-			if err := shutdown(cctx.Context); err != nil {
-				logger.Error("failed to shutdown tracing", "error", err)
+			if err := shutdown(ctx); err != nil {
+				logger.Error("failed to shutdown tracer", "error", err)
 			}
 		}()
 	}
 
-	var s *store.Store
-	var err error
-	if cctx.String("store-postgres-url") != "" {
-		s, err = store.NewStore(cctx.String("store-postgres-url"))
-		if err != nil {
-			return fmt.Errorf("failed to initialize store: %w", err)
-		}
-		defer s.Close()
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cctx.String("redis-address"),
+		Password: "",
+		DB:       0,
+	})
+
+	// Enable tracing instrumentation
+	if err := redisotel.InstrumentTracing(redisClient); err != nil {
+		return fmt.Errorf("failed to instrument redis with tracing: %+v", err)
 	}
 
-	if cctx.String("object-detection-service-host") == "" {
-		return fmt.Errorf("object detection service host is required")
+	// Enable metrics instrumentation
+	if err := redisotel.InstrumentMetrics(redisClient); err != nil {
+		return fmt.Errorf("failed to instrument redis with metrics: %+v", err)
 	}
 
-	detection := objectdetection.NewObjectDetection(cctx.String("object-detection-service-host"))
-
-	if cctx.String("sentiment-service-host") == "" {
-		return fmt.Errorf("sentiment service host is required")
+	// Test the connection to redis
+	_, err = redisClient.Ping(ctx).Result()
+	if err != nil {
+		return fmt.Errorf("failed to ping redis: %+v", err)
 	}
 
-	sentiment := sentiment.NewSentiment(cctx.String("sentiment-service-host"))
-
-	// Start up a Metrics and Profiling goroutine
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/debug/pprof/", http.DefaultServeMux)
-
-	metricServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cctx.Int("port")),
-		Handler: mux,
+	// Create a ClickHouse store
+	clickhouseStore, err := store.NewStore(
+		cctx.String("clickhouse-address"),
+		cctx.String("clickhouse-username"),
+		cctx.String("clickhouse-password"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create clickhouse store: %+v", err)
 	}
 
-	shutdownMetrics := make(chan struct{})
-	metricsShutdown := make(chan struct{})
+	idx, err := indexer.NewIndexer(
+		ctx,
+		logger,
+		redisClient,
+		cctx.String("redis-prefix"),
+		clickhouseStore,
+		u.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create indexer: %+v", err)
+	}
 
-	// Startup metrics server
+	// Start a goroutine to manage the cursor, saving the current cursor every 5 seconds
+	shutdownCursorManager := make(chan struct{})
+	cursorManagerShutdown := make(chan struct{})
 	go func() {
-		logger := logger.With("component", "metrics_server")
+		ticker := time.NewTicker(5 * time.Second)
+		logger := logger.With("component", "cursor_manager")
 
-		logger.Info("metrics server listening", "port", cctx.Int("port"))
-
-		go func() {
-			if err := metricServer.ListenAndServe(); err != http.ErrServerClosed {
-				logger.Error("failed to start metrics server", "error", err)
+		for {
+			select {
+			case <-shutdownCursorManager:
+				logger.Info("shutting down cursor manager")
+				err := idx.WriteCursor(ctx)
+				if err != nil {
+					logger.Error("failed to write cursor during shutdown", "error", err)
+				}
+				logger.Info("cursor manager shut down successfully")
+				close(cursorManagerShutdown)
+				return
+			case <-ticker.C:
+				err := idx.WriteCursor(ctx)
+				if err != nil {
+					logger.Error("failed to write cursor", "error", err)
+				}
 			}
-		}()
-		<-shutdownMetrics
-		if err := metricServer.Shutdown(ctx); err != nil {
-			logger.Error("failed to shutdown metrics server", "error", err)
 		}
-		close(metricsShutdown)
-
-		logger.Info("metrics server shut down")
 	}()
 
-	index := &Index{
-		Detection:                   detection,
-		Sentiment:                   sentiment,
-		PositiveConfidenceThreshold: cctx.Float64("positive-confidence-threshold"),
-		NegativeConfidenceThreshold: cctx.Float64("negative-confidence-threshold"),
-		Logger:                      logger,
-	}
-
-	if s != nil {
-		index.Store = s
-	}
-
-	// Start the Image Indexing loop
-	shutdownImages := make(chan struct{})
-	imagesShutdown := make(chan struct{})
+	// Start a goroutine to manage the liveness checker
+	shutdownLivenessChecker := make(chan struct{})
+	livenessCheckerShutdown := make(chan struct{})
 	go func() {
-		logger := logger.With("component", "image_indexer")
-		logger.Info("Starting image indexing loop...")
+		ticker := time.NewTicker(60 * time.Second)
+		lastSeq := int64(0)
+
+		logger := logger.With("component", "liveness_checker")
+
 		for {
-			ctx := context.Background()
-			index.IndexImages(ctx, int32(cctx.Int("image-page-size")))
 			select {
-			case <-shutdownImages:
-				logger.Info("Shutting down image indexing loop...")
-				close(imagesShutdown)
+			case <-shutdownLivenessChecker:
+				logger.Info("shutting down liveness checker")
+				close(livenessCheckerShutdown)
 				return
-			default:
-				time.Sleep(1 * time.Second)
+			case <-ticker.C:
+				seq, _ := idx.Progress.Get()
+				if seq == lastSeq {
+					logger.Error("no new events in last 60 seconds, shutting down for docker to restart me", "last_seq", seq)
+					close(kill)
+				} else {
+					logger.Info("last event sequence", "seq", seq)
+					lastSeq = seq
+				}
 			}
 		}
+	}()
+
+	logger.Info("connecting to websocket...", "url", u.String())
+	con, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{
+		"User-Agent": []string{"jaz-indexer/" + version.GitCommit},
+	})
+	if err != nil {
+		logger.Error("failed to connect to websocket", "error", err)
+		return err
+	}
+	defer con.Close()
+
+	scheduler := parallel.NewScheduler(200, "jetstream-indexer", slog.Default(), idx.OnEvent)
+
+	conf := jetstreamclient.DefaultClientConfig()
+	conf.WantedCollections = []string{"app.bsky.*"}
+	conf.WebsocketURL = u.String()
+	conf.Compress = true
+	jetstreamClient, err := jetstreamclient.NewClient(conf, slog.Default(), scheduler)
+	if err != nil {
+		return fmt.Errorf("failed to create jetstream client: %+v", err)
+	}
+
+	shutdownRepoStream := make(chan struct{})
+	repoStreamShutdown := make(chan struct{})
+	go func() {
+		var cursor *int64
+		if idx.Progress.LastSeq > 0 {
+			cursor = &idx.Progress.LastSeq
+		}
+
+		ctx := context.Background()
+		ctx, cancel := context.WithCancel(ctx)
+		go func() {
+			err = jetstreamClient.ConnectAndRead(ctx, cursor)
+			if !errors.Is(err, context.Canceled) {
+				logger.Error("HandleRepoStream returned error", "error", err)
+				close(kill)
+			} else {
+				logger.Info("HandleRepoStream exited normally")
+			}
+			close(repoStreamShutdown)
+		}()
+		<-shutdownRepoStream
+		cancel()
 	}()
 
 	select {
 	case <-signals:
-		cancel()
 		logger.Info("shutting down on signal")
 	case <-ctx.Done():
 		logger.Info("shutting down on context done")
+	case <-kill:
+		logger.Info("shutting down on kill signal")
 	}
 
-	logger.Info("shutting down, waiting for workers to clean up...")
+	logger.Info("beginning shutdown...")
 
-	close(shutdownImages)
-	close(shutdownMetrics)
+	// Force shutdown if we don't finish in 30 seconds
+	go func() {
+		<-time.After(30 * time.Second)
+		log.Fatal("failed to shut down in time, forcing exit")
+	}()
 
-	<-imagesShutdown
-	<-metricsShutdown
+	close(shutdownRepoStream)
+	close(shutdownLivenessChecker)
+	close(shutdownCursorManager)
 
-	logger.Info("shutdown complete")
+	<-repoStreamShutdown
+	<-livenessCheckerShutdown
+	<-cursorManagerShutdown
+
+	err = idx.Shutdown()
+	if err != nil {
+		logger.Error("failed to shut down indexer", "error", err)
+	}
+
+	logger.Info("shut down successfully")
 
 	return nil
-}
-
-var imagesIndexedCounter = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "indexer_images_indexed_total",
-	Help: "The total number of images indexed",
-})
-
-var successfullyIndexedImagesCounter = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "indexer_images_indexed_successfully_total",
-	Help: "The total number of images indexed successfully",
-})
-
-var failedToIndexImagesCounter = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "indexer_images_indexed_failed_total",
-	Help: "The total number of images failed to index",
-})
-
-func (index *Index) IndexImages(ctx context.Context, pageSize int32) {
-	ctx, span := tracer.Start(ctx, "IndexImages")
-	defer span.End()
-
-	logger := index.Logger.With("component", "image_processor")
-	logger.Info("Processing images...")
-	start := time.Now()
-
-	unprocessedImages, err := index.Store.Queries.ListImagesToProcess(ctx, pageSize)
-	if err != nil {
-		logger.Error("Failed to get unprocessed images", "error", err)
-		return
-	}
-
-	if len(unprocessedImages) == 0 {
-		logger.Info("No unprocessed images found, skipping process cycle...")
-		return
-	}
-
-	imgMap := make(map[string]int64, len(unprocessedImages))
-	imageIDs := make([]int64, len(unprocessedImages))
-	for i, img := range unprocessedImages {
-		imgMap[fmt.Sprintf("%s_%s_%s", img.PostActorDid, img.PostRkey, img.Cid)] = img.SubjectID
-		imageIDs[i] = img.ID
-	}
-
-	imagesIndexedCounter.Add(float64(len(unprocessedImages)))
-
-	imageMetas := make([]*objectdetection.ImageMeta, len(unprocessedImages))
-	for i, image := range unprocessedImages {
-		url := fmt.Sprintf("https://cdn.bsky.app/img/feed_thumbnail/plain/%s/%s@jpeg", image.PostActorDid, image.Cid)
-		if image.IsVideo {
-			url = fmt.Sprintf("https://video.bsky.app/watch/%s/%s/thumbnail.jpg", image.PostActorDid, image.Cid)
-		}
-		imageMetas[i] = &objectdetection.ImageMeta{
-			PostID:   image.PostRkey,
-			ActorDID: image.PostActorDid,
-			CID:      image.Cid,
-			URL:      url,
-		}
-	}
-
-	results, err := index.Detection.ProcessImages(ctx, imageMetas)
-	if err != nil {
-		logger.Error("Failed to process images", "error", err)
-		return
-	}
-
-	successCount := atomic.NewInt32(0)
-
-	sem := semaphore.NewWeighted(10)
-	for _, result := range results {
-		if err := sem.Acquire(ctx, 1); err != nil {
-			logger.Error("Failed to acquire semaphore", "error", err)
-			break
-		}
-		go func(result *objectdetection.ImageResult) {
-			defer sem.Release(1)
-
-			if len(result.Results) > 0 {
-				successCount.Inc()
-			}
-
-			imageLabels := []string{}
-			for _, class := range result.Results {
-				if class.Confidence >= 0.75 {
-					imageLabels = append(imageLabels, class.Label)
-				}
-			}
-
-			for _, label := range imageLabels {
-				postLabel := fmt.Sprintf("%s:%s", "cv", label)
-
-				// Get the SubjectID for the post
-				subjectID, ok := imgMap[fmt.Sprintf("%s_%s_%s", result.Meta.ActorDID, result.Meta.PostID, result.Meta.CID)]
-				if !ok {
-					logger.Error("Failed to get SubjectID for image", "actor_did", result.Meta.ActorDID, "post_id", result.Meta.PostID, "cid", result.Meta.CID)
-					continue
-				}
-
-				err = index.Store.Queries.CreateRecentPostLabel(ctx, store_queries.CreateRecentPostLabelParams{
-					ActorDid:  result.Meta.ActorDID,
-					Rkey:      result.Meta.PostID,
-					Label:     postLabel,
-					SubjectID: sql.NullInt64{Int64: subjectID, Valid: true},
-				})
-				if err != nil {
-					logger.Error("Failed to create recent post label", "error", err, "actor_did", result.Meta.ActorDID, "rkey", result.Meta.PostID, "label", postLabel)
-				}
-			}
-		}(result)
-	}
-
-	if err := sem.Acquire(ctx, 10); err != nil {
-		logger.Error("Failed to acquire semaphore", "error", err)
-	}
-
-	// Dequeue the images
-	err = index.Store.Queries.DequeueImages(ctx, imageIDs)
-	if err != nil {
-		logger.Error("Failed to dequeue images", "error", err)
-	}
-
-	successes := int(successCount.Load())
-
-	successfullyIndexedImagesCounter.Add(float64(successes))
-	failedToIndexImagesCounter.Add(float64(len(unprocessedImages) - successes))
-
-	span.SetAttributes(
-		attribute.Int("batch_size", len(unprocessedImages)),
-		attribute.Int("successful_image_count", successes),
-		attribute.String("processing_time", time.Since(start).String()),
-	)
-
-	logger.Info("Finished processing images...",
-		"batch_size", len(unprocessedImages),
-		"successfully_processed_image_count", successes,
-		"processing_time", time.Since(start),
-	)
 }

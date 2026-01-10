@@ -1,17 +1,18 @@
 services:
-  indexer:
+  feedgen:
     build:
       context: ../../../
-      dockerfile: atproto/build/indexer/Dockerfile
+      dockerfile: atproto/build/feedgen/Dockerfile
       args:
         - GIT_COMMIT=${GIT_COMMIT:-unknown}
         - BUILD_TIME=${BUILD_TIME:-unknown}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    restart: always
-    image: indexer
-    container_name: atproto-indexer
+    restart: unless-stopped
+    image: feedgen
+    container_name: feedgen
     env_file:
-      - ../../env/indexer.env
+      - ../../env/feedgen.env
     ports:
-      - "8091:8081"
+      - "8094:8080"
+      - "8095:8081"

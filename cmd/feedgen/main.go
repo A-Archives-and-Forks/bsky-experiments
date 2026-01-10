@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -10,10 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jazware/bsky-experiments/pkg/auth"
+	feedgenerator "github.com/jazware/bsky-experiments/pkg/feed-generator"
+	"github.com/jazware/bsky-experiments/pkg/feed-generator/endpoints"
+	"github.com/jazware/bsky-experiments/pkg/feeds/authorlabel"
+	"github.com/jazware/bsky-experiments/pkg/feeds/hot"
+	"github.com/jazware/bsky-experiments/pkg/feeds/static"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
-	"github.com/jazware/bsky-experiments/pkg/search"
-	"github.com/jazware/bsky-experiments/pkg/search/endpoints"
-	"github.com/jazware/bsky-experiments/pkg/usercount"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
 	"github.com/labstack/echo/v4"
@@ -28,8 +32,8 @@ import (
 
 func main() {
 	app := cli.App{
-		Name:    "search",
-		Usage:   "bluesky search and stats service",
+		Name:    "feed-generator",
+		Usage:   "bluesky feed generator",
 		Version: version.String(),
 	}
 
@@ -69,20 +73,20 @@ func main() {
 			EnvVars: []string{"CLICKHOUSE_PASSWORD"},
 		},
 		&cli.StringFlag{
-			Name:    "magic-header-val",
-			Usage:   "magic header value for protected endpoints",
-			Value:   "",
-			EnvVars: []string{"MAGIC_HEADER_VAL"},
+			Name:     "service-endpoint",
+			Usage:    "URL that the feed generator will be available at",
+			Required: true,
+			EnvVars:  []string{"SERVICE_ENDPOINT"},
 		},
-		&cli.DurationFlag{
-			Name:    "stats-cache-ttl",
-			Usage:   "duration to cache stats before refresh",
-			Value:   30 * time.Second,
-			EnvVars: []string{"STATS_CACHE_TTL"},
+		&cli.StringFlag{
+			Name:     "feed-actor-did",
+			Usage:    "DID of the feed actor",
+			Required: true,
+			EnvVars:  []string{"FEED_ACTOR_DID"},
 		},
 	}
 
-	app.Action = Search
+	app.Action = FeedGenerator
 
 	err := app.Run(os.Args)
 	if err != nil {
@@ -91,8 +95,8 @@ func main() {
 	}
 }
 
-func Search(cctx *cli.Context) error {
-	ctx, cancel := context.WithCancel(context.Background())
+func FeedGenerator(cctx *cli.Context) error {
+	ctx, cancel := context.WithCancel(cctx.Context)
 	defer cancel()
 
 	// Setup signal handlers
@@ -101,7 +105,7 @@ func Search(cctx *cli.Context) error {
 
 	// Initialize logger
 	logger := telemetry.StartLogger(cctx)
-	logger.Info("starting search service",
+	logger.Info("starting feed generator",
 		"version", version.Version,
 		"commit", version.GitCommit)
 
@@ -146,11 +150,6 @@ func Search(cctx *cli.Context) error {
 		return fmt.Errorf("failed to instrument redis with tracing: %w", err)
 	}
 
-	// Enable metrics instrumentation for Redis
-	if err := redisotel.InstrumentMetrics(redisClient); err != nil {
-		return fmt.Errorf("failed to instrument redis with metrics: %w", err)
-	}
-
 	// Test the connection to redis
 	_, err = redisClient.Ping(ctx).Result()
 	if err != nil {
@@ -158,38 +157,50 @@ func Search(cctx *cli.Context) error {
 	}
 	logger.Info("connected to redis")
 
-	userCount := usercount.NewUserCount(ctx, redisClient)
+	feedActorDID := cctx.String("feed-actor-did")
 
-	// Create search service
-	searchService, err := search.NewSearchService(
-		ctx,
-		logger,
-		chStore,
-		userCount,
-		redisClient,
-		cctx.Duration("stats-cache-ttl"),
-	)
+	// Set the acceptable DIDs for the feed generator to respond to
+	serviceURL, err := url.Parse(cctx.String("service-endpoint"))
 	if err != nil {
-		return fmt.Errorf("failed to create search service: %w", err)
+		return fmt.Errorf("error parsing service endpoint: %w", err)
 	}
 
-	// Create endpoints
-	api, err := endpoints.NewAPI(
-		logger,
-		searchService,
-		chStore,
-		cctx.String("magic-header-val"),
-	)
+	serviceWebDID := "did:web:" + serviceURL.Hostname()
+	logger.Info("service DIDs configured", "feed_actor_did", feedActorDID, "service_web_did", serviceWebDID)
+
+	acceptableDIDs := []string{feedActorDID, serviceWebDID}
+
+	feedGenerator, err := feedgenerator.NewFeedGenerator(ctx, feedActorDID, serviceWebDID, acceptableDIDs, cctx.String("service-endpoint"))
 	if err != nil {
-		return fmt.Errorf("failed to create API: %w", err)
+		return fmt.Errorf("failed to create FeedGenerator: %w", err)
 	}
 
-	// Start background workers
-	logger.Info("starting stats refresh worker")
-	go searchService.StartStatsRefreshWorker(ctx)
+	endpoints, err := endpoints.NewEndpoints(feedGenerator, chStore)
+	if err != nil {
+		return fmt.Errorf("failed to create Endpoints: %w", err)
+	}
 
-	logger.Info("starting cleanup daemon")
-	go api.RunCleanupDaemon(ctx)
+	// Create feeds
+	logger.Info("initializing hot feed")
+	hotFeed, hotFeedAliases, err := hot.NewFeed(ctx, feedActorDID, chStore, redisClient)
+	if err != nil {
+		return fmt.Errorf("failed to create HotFeed: %w", err)
+	}
+	feedGenerator.AddFeed(hotFeedAliases, hotFeed)
+
+	logger.Info("initializing authorlabel feed")
+	authorLabelFeed, authorLabelFeedAliases, err := authorlabel.NewFeed(ctx, feedActorDID, chStore)
+	if err != nil {
+		return fmt.Errorf("failed to create AuthorLabelFeed: %w", err)
+	}
+	feedGenerator.AddFeed(authorLabelFeedAliases, authorLabelFeed)
+
+	logger.Info("initializing static feed")
+	staticFeed, staticFeedAliases, err := static.NewFeed(ctx, feedActorDID)
+	if err != nil {
+		return fmt.Errorf("failed to create StaticFeed: %w", err)
+	}
+	feedGenerator.AddFeed(staticFeedAliases, staticFeed)
 
 	// Setup Echo router
 	e := echo.New()
@@ -199,18 +210,28 @@ func Search(cctx *cli.Context) error {
 	// Recovery middleware
 	e.Use(middleware.Recover())
 
-	// Structured logging middleware
-	e.Use(slogecho.NewWithFilters(
+	// Structured logging middleware with custom attributes
+	e.Use(slogecho.NewWithConfig(
 		logger,
-		slogecho.IgnorePath("/metrics"),
+		slogecho.Config{
+			WithRequestBody:  false,
+			WithResponseBody: false,
+			Filters: []slogecho.Filter{
+				slogecho.IgnorePath("/metrics"),
+			},
+			DefaultLevel:     slog.LevelInfo,
+			ClientErrorLevel: slog.LevelWarn,
+			ServerErrorLevel: slog.LevelError,
+		},
 	))
 
 	// Serve static files from the public folder
 	e.Static("/public", "./public")
+	e.Static("/assets", "./public/assets")
 
 	// OTEL Middleware
 	e.Use(otelecho.Middleware(
-		"search-api",
+		"feed-generator",
 		otelecho.WithSkipper(func(c echo.Context) bool {
 			return c.Request().URL.Path == "/metrics"
 		}),
@@ -219,7 +240,7 @@ func Search(cctx *cli.Context) error {
 	// CORS middleware
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"https://bsky.jazco.dev"},
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodDelete, http.MethodOptions},
+		AllowMethods: []string{http.MethodGet, http.MethodOptions},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentLength, echo.HeaderContentType},
 		AllowOriginFunc: func(origin string) (bool, error) {
 			u, err := url.Parse(origin)
@@ -233,15 +254,40 @@ func Search(cctx *cli.Context) error {
 	// Prometheus metrics endpoint
 	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 
-	// Register routes
-	e.GET("/stats", api.GetStats)
-	e.GET("/redir", api.RedirectAtURI)
-	e.GET("/repo/:did", api.GetRepoAsJSON)
-	e.GET("/list/members", api.GetListMembers)
-	e.GET("/repo/cleanup", api.GetCleanupStatus)
-	e.POST("/repo/cleanup", api.CleanupOldRecords)
-	e.DELETE("/repo/cleanup", api.CancelCleanupJob)
-	e.GET("/repo/cleanup/stats", api.GetCleanupStats)
+	// Init auth provider
+	storeProvider := auth.NewStoreProvider(chStore)
+
+	auther, err := auth.NewAuth(
+		500_000,
+		time.Hour*12,
+		40,
+		"did:web:feedsky.jazco.io",
+		storeProvider,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create Auth: %w", err)
+	}
+
+	// Public routes (no auth)
+	e.GET("/.well-known/did.json", endpoints.GetWellKnownDID)
+
+	// JWT Auth middleware for feed routes
+	jwtGroup := e.Group("")
+	jwtGroup.Use(auther.AuthenticateRequestViaJWT)
+	jwtGroup.GET("/xrpc/app.bsky.feed.getFeedSkeleton", endpoints.GetFeedSkeleton)
+	jwtGroup.GET("/xrpc/app.bsky.feed.describeFeedGenerator", endpoints.DescribeFeedGenerator)
+
+	// Admin routes (protected by JWT)
+	adminRoutes := jwtGroup.Group("/admin")
+	adminRoutes.GET("/feeds", endpoints.GetFeeds)
+	adminRoutes.Static("/dashboard", "./public")
+
+	// API Key Auth routes
+	apiKeyGroup := e.Group("")
+	apiKeyGroup.Use(auther.AuthenticateRequestViaAPIKey)
+	apiKeyGroup.PUT("/assign_user_to_feed", endpoints.AssignUserToFeed)
+	apiKeyGroup.PUT("/unassign_user_from_feed", endpoints.UnassignUserFromFeed)
+	apiKeyGroup.GET("/feed_members", endpoints.GetFeedMembers)
 
 	// Start HTTP server in a goroutine
 	serverErr := make(chan error, 1)
@@ -272,12 +318,6 @@ func Search(cctx *cli.Context) error {
 
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		logger.Error("failed to shut down HTTP server gracefully", "error", err)
-		return err
-	}
-
-	// Cleanup search service
-	if err := searchService.Shutdown(); err != nil {
-		logger.Error("failed to shut down search service", "error", err)
 		return err
 	}
 

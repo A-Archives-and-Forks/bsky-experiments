@@ -2,7 +2,6 @@ package hot
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,8 +11,7 @@ import (
 	"time"
 
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
+	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 )
@@ -57,10 +55,10 @@ type postRef struct {
 	HasMedia bool     `json:"has_media"`
 }
 
-func NewFeed(ctx context.Context, feedActorDID string, store *store.Store, redis *redis.Client) (*Feed, []string, error) {
+func NewFeed(ctx context.Context, feedActorDID string, chStore *store.Store, redis *redis.Client) (*Feed, []string, error) {
 	f := Feed{
 		FeedActorDID: feedActorDID,
-		Store:        store,
+		Store:        chStore,
 		Redis:        redis,
 	}
 
@@ -130,13 +128,7 @@ func (f *Feed) setReady() {
 }
 
 func (f *Feed) fetchAndCacheHotPosts(ctx context.Context) ([]postRef, error) {
-	rawPosts, err := f.Store.Queries.GetHotPage(ctx, store_queries.GetHotPageParams{
-		Limit: int32(maxPosts),
-		Score: sql.NullFloat64{
-			Float64: 0,
-			Valid:   false,
-		},
-	})
+	rawPosts, err := f.Store.GetHotPosts(ctx, maxPosts, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +140,7 @@ func (f *Feed) fetchAndCacheHotPosts(ctx context.Context) ([]postRef, error) {
 	postRefs := []postRef{}
 	for _, post := range rawPosts {
 		postRef := postRef{
-			ActorDid: post.ActorDid,
+			ActorDid: post.ActorDID,
 			Rkey:     post.Rkey,
 			Langs:    post.Langs,
 			HasMedia: post.HasEmbeddedMedia,
@@ -170,10 +162,7 @@ func (f *Feed) fetchAndCacheHotPosts(ctx context.Context) ([]postRef, error) {
 }
 
 func (f *Feed) fetchAndCacheTopPosts(ctx context.Context, hours int) ([]postRef, error) {
-	rawPosts, err := f.Store.Queries.GetTopPostsInWindow(ctx, store_queries.GetTopPostsInWindowParams{
-		Hours: int32(hours),
-		Limit: int32(maxPosts),
-	})
+	rawPosts, err := f.Store.GetTopPostsInWindow(ctx, hours, maxPosts)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +179,7 @@ func (f *Feed) fetchAndCacheTopPosts(ctx context.Context, hours int) ([]postRef,
 	postRefs := []postRef{}
 	for _, post := range rawPosts {
 		postRef := postRef{
-			ActorDid: post.ActorDid,
+			ActorDid: post.ActorDID,
 			Rkey:     post.Rkey,
 			Langs:    post.Langs,
 			HasMedia: post.HasEmbeddedMedia,

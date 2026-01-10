@@ -1,28 +1,21 @@
 package endpoints
 
 import (
-	"sync"
-	"time"
+	"log/slog"
 
 	"github.com/bluesky-social/indigo/atproto/identity"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store"
-	statsqueries "github.com/jazware/bsky-experiments/pkg/stats/stats_queries"
-	"github.com/jazware/bsky-experiments/pkg/usercount"
+	"github.com/jazware/bsky-experiments/pkg/indexer/store"
+	"github.com/jazware/bsky-experiments/pkg/search"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
+	"time"
 )
 
 type API struct {
-	UserCount *usercount.UserCount
-
-	Store     *store.Store
-	Stats     *statsqueries.Queries
-	Directory identity.Directory
-
-	StatsCacheTTL   time.Duration
-	StatsCache      *StatsCacheEntry
-	StatsCacheRWMux *sync.RWMutex
-
+	Logger          *slog.Logger
+	SearchService   *search.SearchService
+	Store           *store.Store
+	Directory       identity.Directory
 	CheckoutLimiter *rate.Limiter
 	MagicHeaderVal  string
 }
@@ -30,22 +23,19 @@ type API struct {
 var tracer = otel.Tracer("search-api")
 
 func NewAPI(
+	logger *slog.Logger,
+	searchService *search.SearchService,
 	store *store.Store,
-	stats *statsqueries.Queries,
-	userCount *usercount.UserCount,
-	MagicHeaderVal string,
-	statsCacheTTL time.Duration,
+	magicHeaderVal string,
 ) (*API, error) {
 	dir := identity.DefaultDirectory()
 
 	return &API{
-		UserCount:       userCount,
-		Stats:           stats,
+		Logger:          logger.With("component", "api"),
+		SearchService:   searchService,
 		Store:           store,
 		Directory:       dir,
-		MagicHeaderVal:  MagicHeaderVal,
-		StatsCacheTTL:   statsCacheTTL,
-		StatsCacheRWMux: &sync.RWMutex{},
+		MagicHeaderVal:  magicHeaderVal,
 		CheckoutLimiter: rate.NewLimiter(rate.Every(2*time.Second), 1),
 	}, nil
 }

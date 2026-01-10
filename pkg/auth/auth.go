@@ -10,9 +10,9 @@ import (
 	"github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	es256k "github.com/ericvolp12/jwt-go-secp256k1"
-	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt"
 	lru "github.com/hashicorp/golang-lru/arc/v2"
+	"github.com/labstack/echo/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"gitlab.com/yawning/secp256k1-voi/secec"
@@ -192,67 +192,62 @@ func (auth *Auth) GetClaimsFromAuthHeader(ctx context.Context, authHeader string
 	return nil
 }
 
-func (auth *Auth) AuthenticateGinRequestViaJWT(c *gin.Context) {
-	tracer := otel.Tracer("auth")
-	ctx, span := tracer.Start(c.Request.Context(), "Auth:AuthenticateGinRequestViaJWT")
+func (auth *Auth) AuthenticateRequestViaJWT(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		tracer := otel.Tracer("auth")
+		ctx, span := tracer.Start(c.Request().Context(), "Auth:AuthenticateRequestViaJWT")
 
-	authHeader := c.GetHeader("Authorization")
-	if authHeader == "" {
+		authHeader := c.Request().Header.Get("Authorization")
+		if authHeader == "" {
+			span.End()
+			return next(c)
+		}
+
+		claims := jwt.StandardClaims{}
+
+		err := auth.GetClaimsFromAuthHeader(ctx, authHeader, &claims)
+		if err != nil {
+			span.End()
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": fmt.Errorf("Failed to get claims from auth header: %v", err).Error()})
+		}
+
+		if claims.Audience != auth.ServiceDID {
+			span.End()
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": fmt.Sprintf("Invalid audience (expected %s)", auth.ServiceDID)})
+		}
+
+		// Set claims Issuer to context as user DID
+		c.Set("user_did", claims.Issuer)
+		span.SetAttributes(attribute.String("user.did", claims.Issuer))
 		span.End()
-		c.Next()
-		return
+		return next(c)
 	}
-
-	claims := jwt.StandardClaims{}
-
-	err := auth.GetClaimsFromAuthHeader(ctx, authHeader, &claims)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": fmt.Errorf("Failed to get claims from auth header: %v", err).Error()})
-		span.End()
-		c.Abort()
-		return
-	}
-
-	if claims.Audience != auth.ServiceDID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": fmt.Sprintf("Invalid audience (expected %s)", auth.ServiceDID)})
-		c.Abort()
-		return
-	}
-
-	// Set claims Issuer to context as user DID
-	c.Set("user_did", claims.Issuer)
-	span.SetAttributes(attribute.String("user.did", claims.Issuer))
-	span.End()
-	c.Next()
 }
 
-// AuthenticateGinRequestViaAPIKey authenticates a Gin request via an API key
+// AuthenticateRequestViaAPIKey authenticates a request via an API key
 // statically configured for the app, this is useful for testing and debugging
 // or use-case specific scenarios where a DID is not available.
-func (auth *Auth) AuthenticateGinRequestViaAPIKey(c *gin.Context) {
-	tracer := otel.Tracer("auth")
-	_, span := tracer.Start(c.Request.Context(), "Auth:AuthenticateGinRequestViaAPIKey")
-	defer span.End()
+func (auth *Auth) AuthenticateRequestViaAPIKey(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		tracer := otel.Tracer("auth")
+		_, span := tracer.Start(c.Request().Context(), "Auth:AuthenticateRequestViaAPIKey")
+		defer span.End()
 
-	keyFromHeader := c.GetHeader("X-API-Key")
-	if keyFromHeader == "" {
+		keyFromHeader := c.Request().Header.Get("X-API-Key")
+		if keyFromHeader == "" {
+			span.SetAttributes(attribute.Bool("auth.api_key", false))
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Missing required API key in X-API-Key header"})
+		}
+
+		authEntity, err := auth.KeyProvider.GetEntityFromAPIKey(c.Request().Context(), keyFromHeader)
+		if err == nil {
+			span.SetAttributes(attribute.Bool("auth.api_key", true))
+			c.Set("feed.auth.entity", authEntity)
+			return next(c)
+		}
+
 		span.SetAttributes(attribute.Bool("auth.api_key", false))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing required API key in X-API-Key header"})
-		c.Abort()
-		return
+		span.SetAttributes(attribute.String("auth.api_key.error", err.Error()))
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid API key"})
 	}
-
-	authEntity, err := auth.KeyProvider.GetEntityFromAPIKey(c.Request.Context(), keyFromHeader)
-	if err == nil {
-		span.SetAttributes(attribute.Bool("auth.api_key", true))
-		c.Set("feed.auth.entity", authEntity)
-		c.Next()
-		return
-	}
-
-	span.SetAttributes(attribute.Bool("auth.api_key", false))
-	span.SetAttributes(attribute.String("auth.api_key.error", err.Error()))
-	c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
-	c.Abort()
-	return
 }

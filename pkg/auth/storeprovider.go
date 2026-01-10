@@ -2,13 +2,10 @@ package auth
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 
-	"github.com/jazware/bsky-experiments/pkg/consumer/store"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
+	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 )
 
 type StoreProvider struct {
@@ -27,11 +24,7 @@ func (p *StoreProvider) UpdateAPIKeyFeedMapping(ctx context.Context, apiKey stri
 		return fmt.Errorf("failed to marshal feedAuthEntity: %w", err)
 	}
 
-	err = p.Store.Queries.CreateKey(ctx, store_queries.CreateKeyParams{
-		ApiKey:       apiKey,
-		AuthEntity:   authBytes,
-		AssignedUser: feedAuthEntity.UserDID,
-	})
+	err = p.Store.CreateAPIKey(ctx, apiKey, string(authBytes), feedAuthEntity.UserDID)
 	if err != nil {
 		return fmt.Errorf("failed to create key: %w", err)
 	}
@@ -40,9 +33,10 @@ func (p *StoreProvider) UpdateAPIKeyFeedMapping(ctx context.Context, apiKey stri
 }
 
 func (p *StoreProvider) GetEntityFromAPIKey(ctx context.Context, apiKey string) (*FeedAuthEntity, error) {
-	key, err := p.Store.Queries.GetKey(ctx, apiKey)
+	key, err := p.Store.GetAPIKey(ctx, apiKey)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		// ClickHouse doesn't return sql.ErrNoRows, so we check for the error message
+		if err.Error() == "failed to get API key: EOF" || err.Error() == "failed to get API key: sql: no rows in result set" {
 			return nil, ErrAPIKeyNotFound
 		}
 		return nil, fmt.Errorf("failed to get key: %w", err)

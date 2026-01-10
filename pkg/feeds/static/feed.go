@@ -4,8 +4,6 @@ import (
 	"context"
 
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 )
 
@@ -18,7 +16,7 @@ type NotFoundError struct {
 	error
 }
 
-func NewFeed(ctx context.Context, feedActorDID string, store *store.Store, redis *redis.Client) (*Feed, []string, error) {
+func NewFeed(ctx context.Context, feedActorDID string) (*Feed, []string, error) {
 	keys := []string{
 		"bangers",
 		"at-bangers",

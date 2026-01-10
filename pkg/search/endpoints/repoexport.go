@@ -12,21 +12,24 @@ import (
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/repo"
-	"github.com/gin-gonic/gin"
 	"github.com/ipfs/go-cid"
+	"github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-func (api *API) GetRepoAsJSON(c *gin.Context) {
-	ctx := c.Request.Context()
+func (api *API) GetRepoAsJSON(c echo.Context) error {
+	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetRepoAsJSON")
 	defer span.End()
 
-	// Get the repo DID from the query string
-	repoDID := c.Param("did")
+	var req GetRepoRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
+	repoDID := req.DID
 	if repoDID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "did must be provided in path"})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "did must be provided in path"})
 	}
 
 	var url = "https://bsky.network/xrpc/com.atproto.sync.getRepo?did=" + repoDID
@@ -36,39 +39,35 @@ func (api *API) GetRepoAsJSON(c *gin.Context) {
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 		Timeout:   120 * time.Second,
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		log.Printf("Error creating request: %v", err)
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Error creating request"})
 	}
 
-	req.Header.Set("Accept", "application/vnd.ipld.car")
-	req.Header.Set("User-Agent", "jaz-repo-checkout-search-API/0.0.1")
+	httpReq.Header.Set("Accept", "application/vnd.ipld.car")
+	httpReq.Header.Set("User-Agent", "jaz-repo-checkout-search-API/0.0.1")
 
 	// Do your rate limit wait here
 	api.CheckoutLimiter.Wait(ctx)
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error getting repo from BSky: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error getting repo from BSky: %w", err).Error()})
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error getting repo from BSky: %s", resp.Status).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error getting repo from BSky: %s", resp.Status).Error()})
 	}
 
 	r, err := repo.ReadRepoFromCar(ctx, resp.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error reading repo CAR: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error reading repo CAR: %w", err).Error()})
 	}
 
 	err = resp.Body.Close()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error closing response body: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error closing response body: %w", err).Error()})
 	}
 
 	repoJSON := ""
@@ -187,19 +186,22 @@ func (api *API) GetRepoAsJSON(c *gin.Context) {
 		profile,
 	)
 
-	c.Data(http.StatusOK, "application/json", []byte(repoJSON))
+	return c.Blob(http.StatusOK, "application/json", []byte(repoJSON))
 }
 
-func (api *API) GetListMembers(c *gin.Context) {
-	ctx := c.Request.Context()
+func (api *API) GetListMembers(c echo.Context) error {
+	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetListMembers")
 	defer span.End()
 
-	// Get the list URI from the query string
-	uriParam := c.Query("uri")
+	var req GetListMembersRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
+	uriParam := req.URI
 	if uriParam == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "uri must be provided in query"})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "uri must be provided in query"})
 	}
 
 	listURI, err := syntax.ParseATURI(uriParam)
@@ -207,12 +209,10 @@ func (api *API) GetListMembers(c *gin.Context) {
 		// Try to parse as https://bsky.app/profile/{handle_or_did}/lists/{rkey}
 		parts := strings.Split(uriParam, "/")
 		if len(parts) != 7 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("Error parsing URI: %w", err).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("Error parsing URI: %w", err).Error()})
 		}
 		if parts[3] != "profile" && parts[5] != "lists" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("Error parsing URI: %w", err).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("Error parsing URI: %w", err).Error()})
 		}
 		listURI = syntax.ATURI(fmt.Sprintf("at://%s/app.bsky.graph.list/%s", parts[4], parts[6]))
 	}
@@ -221,14 +221,12 @@ func (api *API) GetListMembers(c *gin.Context) {
 	if err != nil {
 		asHandle, err := listURI.Authority().AsHandle()
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("Failed to parse handle or DID from URI: %w", err).Error()})
-			return
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("Failed to parse handle or DID from URI: %w", err).Error()})
 		}
 
 		id, err := api.Directory.LookupHandle(ctx, asHandle)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error looking up handle: %w", err).Error()})
-			return
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error looking up handle: %w", err).Error()})
 		}
 
 		repoDID = id.DID
@@ -243,39 +241,35 @@ func (api *API) GetListMembers(c *gin.Context) {
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 		Timeout:   120 * time.Second,
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", repoFetchURL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", repoFetchURL, nil)
 	if err != nil {
 		log.Printf("Error creating request: %v", err)
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Error creating request"})
 	}
 
-	req.Header.Set("Accept", "application/vnd.ipld.car")
-	req.Header.Set("User-Agent", "jaz-repo-checkout-search-API/0.0.1")
+	httpReq.Header.Set("Accept", "application/vnd.ipld.car")
+	httpReq.Header.Set("User-Agent", "jaz-repo-checkout-search-API/0.0.1")
 
 	// Do your rate limit wait here
 	api.CheckoutLimiter.Wait(ctx)
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error getting repo from BSky: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error getting repo from BSky: %w", err).Error()})
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error getting repo from BSky: %s", resp.Status).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error getting repo from BSky: %s", resp.Status).Error()})
 	}
 
 	r, err := repo.ReadRepoFromCar(ctx, resp.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error reading repo CAR: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error reading repo CAR: %w", err).Error()})
 	}
 
 	err = resp.Body.Close()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("Error closing response body: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("Error closing response body: %w", err).Error()})
 	}
 
 	listMembers := []string{}
@@ -314,5 +308,5 @@ func (api *API) GetListMembers(c *gin.Context) {
 		return nil
 	})
 
-	c.JSON(http.StatusOK, gin.H{"members": listMembers, "list": listObj})
+	return c.JSON(http.StatusOK, map[string]interface{}{"members": listMembers, "list": listObj})
 }

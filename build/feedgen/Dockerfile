@@ -25,12 +25,12 @@ RUN go mod download
 
 # Copy relevant source files
 COPY atproto/pkg ./pkg
-COPY atproto/cmd/search ./cmd/search
+COPY atproto/cmd/feedgen ./cmd/feedgen
 
 # Build the application with version info
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
     -ldflags "-X github.com/jazware/mono/packages/version.GitCommit=${GIT_COMMIT} -X github.com/jazware/mono/packages/version.BuildTime=${BUILD_TIME}" \
-    -o search ./cmd/search
+    -o feedgen ./cmd/feedgen
 
 # Stage 2: Import SSL certificates
 FROM alpine:latest as certs
@@ -44,7 +44,7 @@ FROM debian:stable-slim
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 # Copy the binary from the first stage.
-COPY --from=builder /app/atproto/search .
+COPY --from=builder /app/atproto/feedgen .
 
 # Set the startup command to run the binary
-CMD ["./search"]
+CMD ["./feedgen"]

@@ -3,8 +3,6 @@ package endpoints
 import (
 	"bytes"
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,150 +19,117 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/repo"
 	"github.com/bluesky-social/indigo/xrpc"
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
+	"github.com/jazware/bsky-experiments/pkg/indexer/store"
+	"github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/time/rate"
 )
 
-type CleanupOldRecordsRequest struct {
-	Identifier          string   `json:"identifier"`
-	AppPassword         string   `json:"app_password"`
-	CleanupTypes        []string `json:"cleanup_types"`
-	DeleteUntilDaysAgo  int      `json:"delete_until_days_ago"`
-	ActuallyDeleteStuff bool     `json:"actually_delete_stuff"`
-}
-
 var cleanupUserAgent = "jaz-repo-cleanup-tool/0.0.1"
 
-func (api *API) CleanupOldRecords(c *gin.Context) {
-	ctx := c.Request.Context()
+func (api *API) CleanupOldRecords(c echo.Context) error {
+	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "CleanupOldRecords")
 	defer span.End()
 
 	var req CleanupOldRecordsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("error parsing request: %w", err).Error()})
-		return
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Errorf("error parsing request: %w", err).Error()})
 	}
 
 	res, err := api.enqueueCleanupJob(ctx, req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error cleaning up records: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("error cleaning up records: %w", err).Error()})
 	}
 
-	c.JSON(http.StatusOK, res)
+	return c.JSON(http.StatusOK, res)
 }
 
-func (api *API) GetCleanupStatus(c *gin.Context) {
-	ctx := c.Request.Context()
+func (api *API) GetCleanupStatus(c echo.Context) error {
+	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetCleanupStatus")
 	defer span.End()
 
-	jobID := c.Query("job_id")
-	if jobID != "" {
-		job, err := api.Store.Queries.GetRepoCleanupJob(ctx, jobID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error getting job: %w", err).Error()})
-			return
-		}
-		job.RefreshToken = ""
-		c.JSON(http.StatusOK, job)
-		return
+	var req GetCleanupStatusRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	did := c.Query("did")
-	if did != "" {
-		jobs, err := api.Store.Queries.GetCleanupJobsByRepo(ctx, store_queries.GetCleanupJobsByRepoParams{Repo: did, Limit: 100})
+	if req.JobID != "" {
+		job, err := api.Store.GetRepoCleanupJob(ctx, req.JobID)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "no jobs found for the provided DID"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error getting jobs: %w", err).Error()})
-			return
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "job not found"})
+		}
+		job.RefreshToken = ""
+		return c.JSON(http.StatusOK, job)
+	}
+
+	if req.DID != "" {
+		jobs, err := api.Store.GetCleanupJobsByRepo(ctx, req.DID, 100)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("error getting jobs: %w", err).Error()})
+		}
+		if len(jobs) == 0 {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "no jobs found for the provided DID"})
 		}
 		for i := range jobs {
 			jobs[i].RefreshToken = ""
 		}
-		c.JSON(http.StatusOK, jobs)
-		return
+		return c.JSON(http.StatusOK, jobs)
 	}
 
-	c.JSON(http.StatusBadRequest, gin.H{"error": "must specify either job_id or did in query params"})
+	return c.JSON(http.StatusBadRequest, map[string]string{"error": "must specify either job_id or did in query params"})
 }
 
-func (api *API) GetCleanupStats(c *gin.Context) {
-	ctx := c.Request.Context()
+func (api *API) GetCleanupStats(c echo.Context) error {
+	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "GetCleanupStats")
 	defer span.End()
 
-	cleanupStats, err := api.Store.Queries.GetCleanupStats(ctx)
+	cleanupStats, err := api.Store.GetCleanupStats(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error getting cleanup metadata: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("error getting cleanup metadata: %w", err).Error()})
 	}
 
-	c.JSON(http.StatusOK, cleanupStats)
+	return c.JSON(http.StatusOK, cleanupStats)
 }
 
-func (api *API) CancelCleanupJob(c *gin.Context) {
-	ctx := c.Request.Context()
+func (api *API) CancelCleanupJob(c echo.Context) error {
+	ctx := c.Request().Context()
 	ctx, span := tracer.Start(ctx, "CancelCleanupJob")
 	defer span.End()
 
-	jobID := c.Query("job_id")
-	if jobID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "must specify job_id in query params"})
-		return
+	var req CancelCleanupJobRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	job, err := api.Store.Queries.GetRepoCleanupJob(ctx, jobID)
+	if req.JobID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "must specify job_id in query params"})
+	}
+
+	job, err := api.Store.GetRepoCleanupJob(ctx, req.JobID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error getting job: %w", err).Error()})
-		return
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "job not found"})
 	}
 
 	if job.JobState == "completed" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "job already completed"})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "job already completed"})
 	}
 
 	job.JobState = "cancelled"
 	job.RefreshToken = ""
 	job.UpdatedAt = time.Now().UTC()
 
-	_, err = api.Store.Queries.UpsertRepoCleanupJob(ctx, store_queries.UpsertRepoCleanupJobParams{
-		JobID:           job.JobID,
-		Repo:            job.Repo,
-		RefreshToken:    job.RefreshToken,
-		CleanupTypes:    job.CleanupTypes,
-		DeleteOlderThan: job.DeleteOlderThan,
-		NumDeleted:      job.NumDeleted,
-		NumDeletedToday: job.NumDeletedToday,
-		EstNumRemaining: job.EstNumRemaining,
-		JobState:        job.JobState,
-		UpdatedAt:       job.UpdatedAt,
-		LastDeletedAt:   job.LastDeletedAt,
-	})
+	_, err = api.Store.UpsertRepoCleanupJob(ctx, *job)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error updating job: %w", err).Error()})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Errorf("error updating job: %w", err).Error()})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "job cancelled"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "job cancelled"})
 }
 
 type cleanupInfo struct {
@@ -239,11 +204,9 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 	log = log.With("handle", out.Handle)
 
 	// Check if we have a pending job for this DID
-	existingJobs, err := api.Store.Queries.GetRunningCleanupJobsByRepo(ctx, out.Did)
+	existingJobs, err := api.Store.GetRunningCleanupJobsByRepo(ctx, out.Did)
 	if err != nil {
-		if err != sql.ErrNoRows {
-			log.Error("Error getting existing jobs", "error", err)
-		}
+		log.Error("Error getting existing jobs", "error", err)
 	} else if len(existingJobs) > 0 {
 		log.Info("Found existing job for DID, skipping")
 		return &cleanupInfo{
@@ -379,8 +342,9 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 		Message:     "Records will not be deleted",
 	}
 	if req.ActuallyDeleteStuff {
-		// Create a new jobParams
-		jobParams := store_queries.UpsertRepoCleanupJobParams{
+		// Create a new job
+		now := time.Now().UTC()
+		job := store.RepoCleanupJob{
 			JobID:           uuid.New().String(),
 			Repo:            did.String(),
 			RefreshToken:    out.RefreshJwt,
@@ -388,20 +352,22 @@ func (api *API) enqueueCleanupJob(ctx context.Context, req CleanupOldRecordsRequ
 			DeleteOlderThan: time.Now().UTC().AddDate(0, 0, -req.DeleteUntilDaysAgo),
 			NumDeleted:      0,
 			NumDeletedToday: 0,
-			EstNumRemaining: int32(len(recordsToDelete)),
+			EstNumRemaining: int64(len(recordsToDelete)),
 			JobState:        "running",
-			UpdatedAt:       time.Now().UTC(),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			LastDeletedAt:   nil,
 		}
 
-		job, err := api.Store.Queries.UpsertRepoCleanupJob(ctx, jobParams)
+		createdJob, err := api.Store.UpsertRepoCleanupJob(ctx, job)
 		if err != nil {
 			log.Error("Error creating job", "error", err)
 			return nil, fmt.Errorf("error creating job: %w", err)
 		}
 
-		info.Message = fmt.Sprintf("%d records enqueued for deletion in job at: https://bsky-search.jazco.io/repo/cleanup?job_id=%s", len(recordsToDelete), job.JobID)
-		info.JobID = job.JobID
-		log.Info("Created cleanup job", "job_id", job.JobID)
+		info.Message = fmt.Sprintf("%d records enqueued for deletion in job at: https://bsky-search.jazco.io/repo/cleanup?job_id=%s", len(recordsToDelete), createdJob.JobID)
+		info.JobID = createdJob.JobID
+		log.Info("Created cleanup job", "job_id", createdJob.JobID)
 	}
 
 	return &info, nil
@@ -414,7 +380,7 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 
 	for {
 		log.Info("Getting jobs to process")
-		jobs, err := api.Store.Queries.GetRunningCleanupJobs(ctx, 100)
+		jobs, err := api.Store.GetRunningCleanupJobs(ctx, 100)
 		if err != nil {
 			log.Error("Error getting running jobs", "error", err)
 			time.Sleep(30 * time.Second)
@@ -422,14 +388,14 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 		}
 
 		// Filter for jobs that haven't had a deletion run in the last hour and haven't hit the max for the day
-		jobsToRun := []*store_queries.RepoCleanupJob{}
+		jobsToRun := []*store.RepoCleanupJob{}
 		anHourAgo := time.Now().UTC().Add(-1 * time.Hour)
 		aDayAgo := time.Now().UTC().Add(-24 * time.Hour)
 		for i := range jobs {
 			job := jobs[i]
-			if !job.LastDeletedAt.Valid || // Add new jobs
-				(job.LastDeletedAt.Time.Before(anHourAgo) && job.NumDeletedToday < int32(maxDeletesPerDay)) ||
-				(job.LastDeletedAt.Time.Before(aDayAgo)) {
+			if job.LastDeletedAt == nil || // Add new jobs
+				(job.LastDeletedAt.Before(anHourAgo) && job.NumDeletedToday < int64(maxDeletesPerDay)) ||
+				(job.LastDeletedAt.Before(aDayAgo)) {
 				jobsToRun = append(jobsToRun, &job)
 			}
 		}
@@ -453,7 +419,7 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 				wg.Done()
 				continue
 			}
-			go func(job store_queries.RepoCleanupJob) {
+			go func(job store.RepoCleanupJob) {
 				defer func() {
 					sem.Release(1)
 					wg.Done()
@@ -462,26 +428,15 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 				resJob, err := api.cleanupNextBatch(ctx, job)
 				if err != nil {
 					log.Error("Error cleaning up batch", "error", err)
+					now := time.Now().UTC()
 					resJob = &job
-					resJob.LastDeletedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
-					resJob.UpdatedAt = time.Now().UTC()
+					resJob.LastDeletedAt = &now
+					resJob.UpdatedAt = now
 					return
 				}
 
 				if resJob != nil {
-					_, err = api.Store.Queries.UpsertRepoCleanupJob(ctx, store_queries.UpsertRepoCleanupJobParams{
-						JobID:           resJob.JobID,
-						Repo:            resJob.Repo,
-						RefreshToken:    resJob.RefreshToken,
-						CleanupTypes:    resJob.CleanupTypes,
-						DeleteOlderThan: resJob.DeleteOlderThan,
-						NumDeleted:      resJob.NumDeleted,
-						NumDeletedToday: resJob.NumDeletedToday,
-						EstNumRemaining: resJob.EstNumRemaining,
-						JobState:        resJob.JobState,
-						UpdatedAt:       resJob.UpdatedAt,
-						LastDeletedAt:   resJob.LastDeletedAt,
-					})
+					_, err = api.Store.UpsertRepoCleanupJob(ctx, *resJob)
 					if err != nil {
 						log.Error("Error updating job", "error", err)
 						return
@@ -499,14 +454,14 @@ func (api *API) RunCleanupDaemon(ctx context.Context) {
 var maxDeletesPerHour = 4000
 var maxDeletesPerDay = 30_000
 
-func (api *API) cleanupNextBatch(ctx context.Context, job store_queries.RepoCleanupJob) (*store_queries.RepoCleanupJob, error) {
+func (api *API) cleanupNextBatch(ctx context.Context, job store.RepoCleanupJob) (*store.RepoCleanupJob, error) {
 	log := slog.With("source", "cleanup_next_batch", "job_id", job.JobID, "did", job.Repo)
 	log.Info("Cleaning up next batch")
 	// If the last deletion job ran today and we're at the max for the day, return
-	if job.LastDeletedAt.Time.UTC().Day() == time.Now().UTC().Day() && job.NumDeletedToday >= int32(maxDeletesPerDay) {
+	if job.LastDeletedAt != nil && job.LastDeletedAt.UTC().Day() == time.Now().UTC().Day() && job.NumDeletedToday >= int64(maxDeletesPerDay) {
 		log.Info("Already deleted max records today, skipping")
 		return nil, nil
-	} else if job.LastDeletedAt.Time.UTC().Day() != time.Now().UTC().Day() {
+	} else if job.LastDeletedAt != nil && job.LastDeletedAt.UTC().Day() != time.Now().UTC().Day() {
 		// If the last deletion job ran on a different day, reset the daily counter
 		job.NumDeletedToday = 0
 	}
@@ -675,7 +630,7 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store_queries.RepoClea
 	deleteBatches := []*comatproto.RepoApplyWrites_Input{}
 	batchNum := 0
 	for i, path := range recordsToDelete {
-		if i > maxDeletesPerHour || job.NumDeletedToday+int32(i) > int32(maxDeletesPerDay) {
+		if i > maxDeletesPerHour || job.NumDeletedToday+int64(i) > int64(maxDeletesPerDay) {
 			break
 		}
 		if i%10 == 0 {
@@ -729,11 +684,12 @@ func (api *API) cleanupNextBatch(ctx context.Context, job store_queries.RepoClea
 		"est_remaining", estRemaining,
 	)
 
-	job.NumDeletedToday += int32(numDeleted)
-	job.NumDeleted += int32(numDeleted)
-	job.EstNumRemaining = int32(estRemaining)
-	job.UpdatedAt = time.Now().UTC()
-	job.LastDeletedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	now := time.Now().UTC()
+	job.NumDeletedToday += int64(numDeleted)
+	job.NumDeleted += int64(numDeleted)
+	job.EstNumRemaining = int64(estRemaining)
+	job.UpdatedAt = now
+	job.LastDeletedAt = &now
 
 	if job.EstNumRemaining <= 0 {
 		job.RefreshToken = ""

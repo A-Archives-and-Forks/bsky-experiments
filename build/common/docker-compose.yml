@@ -1,0 +1,22 @@
+services:
+  redis:
+    image: redis/redis-stack:7.4.0-v8
+    container_name: atproto-redis
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ../../data/redis:/data
+    environment:
+      - REDIS_ARGS=--appendonly yes
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: atproto-clickhouse
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ../../data/clickhouse:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144

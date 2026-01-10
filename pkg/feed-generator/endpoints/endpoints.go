@@ -15,13 +15,12 @@ import (
 	"github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/jazware/bsky-experiments/pkg/auth"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
 	feedgenerator "github.com/jazware/bsky-experiments/pkg/feed-generator"
+	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"golang.org/x/time/rate"
 
-	"github.com/gin-gonic/gin"
 	"github.com/kwertop/gostatix"
+	"github.com/labstack/echo/v4"
 	"github.com/whyrusleeping/go-did"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -34,7 +33,6 @@ type DescriptionCacheItem struct {
 
 type Endpoints struct {
 	FeedGenerator   *feedgenerator.FeedGenerator
-	GraphJSONUrl    string
 	FeedUsers       map[string][]string
 	usersLk         sync.RWMutex
 	UniqueSeenUsers *bloom.BloomFilter
@@ -56,7 +54,23 @@ type DidResponse struct {
 	Service []did.Service `json:"service"`
 }
 
-func NewEndpoints(feedGenerator *feedgenerator.FeedGenerator, graphJSONUrl string, store *store.Store) (*Endpoints, error) {
+// Request types for Echo binding
+type GetFeedSkeletonRequest struct {
+	Feed   string `query:"feed"`
+	Limit  string `query:"limit"`
+	Cursor string `query:"cursor"`
+}
+
+type FeedUserRequest struct {
+	FeedName string `query:"feedName"`
+	Handle   string `query:"handle"`
+}
+
+type GetFeedMembersRequest struct {
+	FeedName string `query:"feedName"`
+}
+
+func NewEndpoints(feedGenerator *feedgenerator.FeedGenerator, chStore *store.Store) (*Endpoints, error) {
 	uniqueSeenUsers := bloom.NewWithEstimates(1000000, 0.01)
 
 	base := identity.BaseDirectory{
@@ -76,11 +90,10 @@ func NewEndpoints(feedGenerator *feedgenerator.FeedGenerator, graphJSONUrl strin
 
 	ep := Endpoints{
 		FeedGenerator:       feedGenerator,
-		GraphJSONUrl:        graphJSONUrl,
 		UniqueSeenUsers:     uniqueSeenUsers,
 		FeedUsers:           map[string][]string{},
 		dir:                 &dir,
-		Store:               store,
+		Store:               chStore,
 		DescriptionCacheTTL: 30 * time.Minute,
 		TopKUsersAndFeeds:   newTopK(),
 	}
@@ -109,9 +122,9 @@ func NewEndpoints(feedGenerator *feedgenerator.FeedGenerator, graphJSONUrl strin
 	return &ep, nil
 }
 
-func (ep *Endpoints) GetWellKnownDID(c *gin.Context) {
+func (ep *Endpoints) GetWellKnownDID(c echo.Context) error {
 	tracer := otel.Tracer("feedgenerator")
-	_, span := tracer.Start(c.Request.Context(), "FeedGenerator:Endpoints:GetWellKnownDID")
+	_, span := tracer.Start(c.Request().Context(), "FeedGenerator:Endpoints:GetWellKnownDID")
 	defer span.End()
 
 	// Use a custom struct to fix missing omitempty on did.Document
@@ -121,18 +134,17 @@ func (ep *Endpoints) GetWellKnownDID(c *gin.Context) {
 		Service: ep.FeedGenerator.DIDDocument.Service,
 	}
 
-	c.JSON(http.StatusOK, didResponse)
+	return c.JSON(http.StatusOK, didResponse)
 }
 
-func (ep *Endpoints) DescribeFeedGenerator(c *gin.Context) {
+func (ep *Endpoints) DescribeFeedGenerator(c echo.Context) error {
 	tracer := otel.Tracer("feedgenerator")
-	ctx, span := tracer.Start(c.Request.Context(), "FeedGenerator:Endpoints:DescribeFeedGenerator")
+	ctx, span := tracer.Start(c.Request().Context(), "FeedGenerator:Endpoints:DescribeFeedGenerator")
 	defer span.End()
 
 	if ep.DescriptionCache != nil && ep.DescriptionCache.ExpiresAt.After(time.Now()) {
 		span.SetAttributes(attribute.String("cache.hit", "true"))
-		c.JSON(http.StatusOK, ep.DescriptionCache.Description)
-		return
+		return c.JSON(http.StatusOK, ep.DescriptionCache.Description)
 	}
 
 	span.SetAttributes(attribute.String("cache.hit", "false"))
@@ -143,8 +155,7 @@ func (ep *Endpoints) DescribeFeedGenerator(c *gin.Context) {
 		newDescriptions, err := feed.Describe(ctx)
 		if err != nil {
 			span.RecordError(err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
 		for _, newDescription := range newDescriptions {
@@ -165,51 +176,52 @@ func (ep *Endpoints) DescribeFeedGenerator(c *gin.Context) {
 		ExpiresAt:   time.Now().Add(ep.DescriptionCacheTTL),
 	}
 
-	c.JSON(http.StatusOK, feedGeneratorDescription)
+	return c.JSON(http.StatusOK, feedGeneratorDescription)
 }
 
-func (ep *Endpoints) GetFeedSkeleton(c *gin.Context) {
+func (ep *Endpoints) GetFeedSkeleton(c echo.Context) error {
 	// Incoming requests should have a query parameter "feed" that looks like:
 	// 		at://did:web:feedsky.jazco.io/app.bsky.feed.generator/feed-name
 	// Also a query parameter "limit" that looks like: 50
 	// Also a query parameter "cursor" that is either the empty string
 	// or the cursor returned from a previous request
 	tracer := otel.Tracer("feed-generator")
-	ctx, span := tracer.Start(c.Request.Context(), "FeedGenerator:Endpoints:GetFeedSkeleton")
+	ctx, span := tracer.Start(c.Request().Context(), "FeedGenerator:Endpoints:GetFeedSkeleton")
 	defer span.End()
 
+	var req GetFeedSkeletonRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
 	// Get userDID from the request context, which is set by the auth middleware
-	userDID := c.GetString("user_did")
+	userDID, _ := c.Get("user_did").(string)
 
 	start := time.Now()
 
-	feedQuery := c.Query("feed")
-	if feedQuery == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "feed query parameter is required"})
-		return
+	if req.Feed == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "feed query parameter is required"})
 	}
 
-	c.Set("feedQuery", feedQuery)
-	span.SetAttributes(attribute.String("feed.query", feedQuery))
+	c.Set("feedQuery", req.Feed)
+	span.SetAttributes(attribute.String("feed.query", req.Feed))
 
 	feedPrefix := ""
 	for _, acceptablePrefix := range ep.FeedGenerator.AcceptableURIPrefixes {
-		if strings.HasPrefix(feedQuery, acceptablePrefix) {
+		if strings.HasPrefix(req.Feed, acceptablePrefix) {
 			feedPrefix = acceptablePrefix
 			break
 		}
 	}
 
 	if feedPrefix == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "this feed generator does not serve feeds for the given DID"})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "this feed generator does not serve feeds for the given DID"})
 	}
 
 	// Get the feed name from the query
-	feedName := strings.TrimPrefix(feedQuery, feedPrefix)
+	feedName := strings.TrimPrefix(req.Feed, feedPrefix)
 	if feedName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "feed name is required"})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "feed name is required"})
 	}
 
 	// Count the user
@@ -221,10 +233,9 @@ func (ep *Endpoints) GetFeedSkeleton(c *gin.Context) {
 
 	// Get the limit from the query, default to 50, maximum of 250
 	limit := int64(50)
-	limitQuery := c.Query("limit")
-	span.SetAttributes(attribute.String("feed.limit.raw", limitQuery))
-	if limitQuery != "" {
-		parsedLimit, err := strconv.ParseInt(limitQuery, 10, 64)
+	span.SetAttributes(attribute.String("feed.limit.raw", req.Limit))
+	if req.Limit != "" {
+		parsedLimit, err := strconv.ParseInt(req.Limit, 10, 64)
 		if err != nil {
 			span.SetAttributes(attribute.Bool("feed.limit.failed_to_parse", true))
 			limit = 50
@@ -239,34 +250,29 @@ func (ep *Endpoints) GetFeedSkeleton(c *gin.Context) {
 
 	span.SetAttributes(attribute.Int64("feed.limit.parsed", limit))
 
-	// Get the cursor from the query
-	cursor := c.Query("cursor")
-	c.Set("cursor", cursor)
+	c.Set("cursor", req.Cursor)
 
 	if ep.FeedGenerator.FeedMap == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "feed generator has no feeds configured"})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "feed generator has no feeds configured"})
 	}
 
 	feed, ok := ep.FeedGenerator.FeedMap[feedName]
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "feed not found"})
-		return
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "feed not found"})
 	}
 
 	// Get the feed items
-	feedItems, newCursor, err := feed.GetPage(ctx, feedName, userDID, limit, cursor)
+	feedItems, newCursor, err := feed.GetPage(ctx, feedName, userDID, limit, req.Cursor)
 	if err != nil {
 		span.RecordError(err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to get feed items: %s", err.Error())})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to get feed items: %s", err.Error())})
 	}
 
 	span.SetAttributes(attribute.Int("feed.items.length", len(feedItems)))
 
 	feedRequestLatency.WithLabelValues(feedName).Observe(time.Since(start).Seconds())
 
-	c.JSON(http.StatusOK, appbsky.FeedGetFeedSkeleton_Output{
+	return c.JSON(http.StatusOK, appbsky.FeedGetFeedSkeleton_Output{
 		Feed:   feedItems,
 		Cursor: newCursor,
 	})
@@ -313,169 +319,158 @@ func (ep *Endpoints) ProcessUser(feedName string, userDID string) {
 //
 //
 
-func (ep *Endpoints) AssignUserToFeed(c *gin.Context) {
+var binder = echo.DefaultBinder{}
+
+func (ep *Endpoints) AssignUserToFeed(c echo.Context) error {
 	tracer := otel.Tracer("feed-generator")
-	ctx, span := tracer.Start(c.Request.Context(), "FeedGenerator:Endpoints:AssignUserToFeed")
+	ctx, span := tracer.Start(c.Request().Context(), "FeedGenerator:Endpoints:AssignUserToFeed")
 	defer span.End()
 
-	rawAuthEntity, exists := c.Get("feed.auth.entity")
-	if !exists {
+	rawAuthEntity := c.Get("feed.auth.entity")
+	if rawAuthEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.not_authorized", true))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: no user DID in context"})
-		return
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: no user DID in context"})
 	}
 
 	// Cast the rawAuthEntity to a FeedAuthEntity
 	authEntity, ok := rawAuthEntity.(*auth.FeedAuthEntity)
 	if !ok || authEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.not_authorized", true))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: could not cast auth entity"})
-		return
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: could not cast auth entity"})
 	}
 
-	feedName := c.Query("feedName")
-	if feedName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "feedName is required"})
-		return
+	var req FeedUserRequest
+	if err := binder.BindQueryParams(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	if authEntity.FeedAlias != feedName {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: you are not authorized to assign users to this feed"})
-		return
+	if req.FeedName == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "feedName is required"})
 	}
 
-	targetHandle := c.Query("handle")
-	if targetHandle == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "handle of user to add to feed is required"})
-		return
+	if authEntity.FeedAlias != req.FeedName {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: you are not authorized to assign users to this feed"})
 	}
 
-	handle, err := syntax.ParseHandle(targetHandle)
+	if req.Handle == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "handle of user to add to feed is required"})
+	}
+
+	handle, err := syntax.ParseHandle(req.Handle)
 	if err != nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.invalid_handle", true))
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid handle: %s", err.Error())})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid handle: %s", err.Error())})
 	}
 
 	id, err := ep.dir.LookupHandle(ctx, handle)
 	if err != nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.handle_not_found", true))
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("failed to resolve handle to did: %s", err.Error())})
-		return
+		return c.JSON(http.StatusNotFound, map[string]string{"error": fmt.Sprintf("failed to resolve handle to did: %s", err.Error())})
 	}
 
-	err = ep.Store.Queries.CreateActorLabel(ctx, store_queries.CreateActorLabelParams{
-		ActorDid: id.DID.String(),
-		Label:    feedName,
-	})
+	err = ep.Store.CreateActorLabel(ctx, id.DID.String(), req.FeedName)
 	if err != nil {
 		slog.Error("failed to assign label to user", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to assign label"})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "success"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "success"})
 }
 
-func (ep *Endpoints) UnassignUserFromFeed(c *gin.Context) {
+func (ep *Endpoints) UnassignUserFromFeed(c echo.Context) error {
 	tracer := otel.Tracer("feed-generator")
-	ctx, span := tracer.Start(c.Request.Context(), "FeedGenerator:Endpoints:UnassignUserFromFeed")
+	ctx, span := tracer.Start(c.Request().Context(), "FeedGenerator:Endpoints:UnassignUserFromFeed")
 	defer span.End()
 
-	rawAuthEntity, exists := c.Get("feed.auth.entity")
-	if !exists {
+	rawAuthEntity := c.Get("feed.auth.entity")
+	if rawAuthEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.not_authorized", true))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: no user DID in context"})
-		return
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: no user DID in context"})
 	}
 
 	// Cast the rawAuthEntity to a FeedAuthEntity
 	authEntity, ok := rawAuthEntity.(*auth.FeedAuthEntity)
 	if !ok || authEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.not_authorized", true))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: could not cast auth entity"})
-		return
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: could not cast auth entity"})
 	}
 
-	feedName := c.Query("feedName")
-	if feedName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "feedName is required"})
-		return
+	var req FeedUserRequest
+	if err := binder.BindQueryParams(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	if authEntity.FeedAlias != feedName {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: you are not authorized to assign users to this feed"})
-		return
+	if req.FeedName == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "feedName is required"})
 	}
 
-	targetHandle := c.Query("handle")
-	if targetHandle == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "handle of user to add to feed is required"})
-		return
+	if authEntity.FeedAlias != req.FeedName {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: you are not authorized to assign users to this feed"})
 	}
 
-	handle, err := syntax.ParseHandle(targetHandle)
+	if req.Handle == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "handle of user to add to feed is required"})
+	}
+
+	handle, err := syntax.ParseHandle(req.Handle)
 	if err != nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.invalid_handle", true))
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid handle: %s", err.Error())})
-		return
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid handle: %s", err.Error())})
 	}
 
 	id, err := ep.dir.LookupHandle(ctx, handle)
 	if err != nil {
 		span.SetAttributes(attribute.Bool("feed.assign_label.handle_not_found", true))
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("failed to resolve handle to did: %s", err.Error())})
-		return
+		return c.JSON(http.StatusNotFound, map[string]string{"error": fmt.Sprintf("failed to resolve handle to did: %s", err.Error())})
 	}
 
-	err = ep.Store.Queries.DeleteActorLabel(ctx, store_queries.DeleteActorLabelParams{
-		ActorDid: id.DID.String(),
-		Label:    feedName,
-	})
+	err = ep.Store.DeleteActorLabel(ctx, id.DID.String(), req.FeedName)
 	if err != nil {
 		slog.Error("failed to unassign label from user", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to unassign label"})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "success"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "success"})
 }
 
-func (ep *Endpoints) GetFeedMembers(c *gin.Context) {
+func (ep *Endpoints) GetFeedMembers(c echo.Context) error {
 	tracer := otel.Tracer("feed-generator")
-	ctx, span := tracer.Start(c.Request.Context(), "FeedGenerator:Endpoints:GetFeedMembers")
+	ctx, span := tracer.Start(c.Request().Context(), "FeedGenerator:Endpoints:GetFeedMembers")
 	defer span.End()
 
-	rawAuthEntity, exists := c.Get("feed.auth.entity")
-	if !exists {
+	rawAuthEntity := c.Get("feed.auth.entity")
+	if rawAuthEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.get_members.not_authorized", true))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: no user DID in context"})
-		return
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: no user DID in context"})
 	}
 
 	// Cast the rawAuthEntity to a FeedAuthEntity
 	authEntity, ok := rawAuthEntity.(*auth.FeedAuthEntity)
 	if !ok || authEntity == nil {
 		span.SetAttributes(attribute.Bool("feed.get_members.not_authorized", true))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: could not cast auth entity"})
-		return
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: could not cast auth entity"})
 	}
 
-	feedName := c.Query("feedName")
-	if feedName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "feedName is required"})
-		return
+	var req GetFeedMembersRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	if authEntity.FeedAlias != feedName {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized: you are not authorized to list the users assigned to this feed"})
-		return
+	if req.FeedName == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "feedName is required"})
 	}
 
-	authors, err := ep.Store.Queries.ListActorsByLabel(ctx, feedName)
+	if authEntity.FeedAlias != req.FeedName {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authorized: you are not authorized to list the users assigned to this feed"})
+	}
+
+	authors, err := ep.Store.ListActorsByLabel(ctx, req.FeedName)
 	if err != nil {
 		span.SetAttributes(attribute.Bool("feed.get_members.error", true))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error getting authors: %s", err.Error())})
-		return
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error getting authors: %s", err.Error())})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"authors": authors})
+	return c.JSON(http.StatusOK, map[string]interface{}{"authors": authors})
 }
 
 type FeedMeta struct {
@@ -488,8 +483,8 @@ type GetFeedsResponse struct {
 	Feeds map[string]FeedMeta `json:"feeds"`
 }
 
-func (ep *Endpoints) GetFeeds(c *gin.Context) {
-	_, span := otel.Tracer("feed-generator").Start(c.Request.Context(), "GetFeeds")
+func (ep *Endpoints) GetFeeds(c echo.Context) error {
+	_, span := otel.Tracer("feed-generator").Start(c.Request().Context(), "GetFeeds")
 	defer span.End()
 
 	feeds := make(map[string]FeedMeta)
@@ -510,5 +505,5 @@ func (ep *Endpoints) GetFeeds(c *gin.Context) {
 		Feeds: feeds,
 	}
 
-	c.JSON(http.StatusOK, resp)
+	return c.JSON(http.StatusOK, resp)
 }

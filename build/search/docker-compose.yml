@@ -1,37 +1,20 @@
-version: '3.8'
-
 services:
-  bsky-search:
+  indexer:
     build:
-      context: ../../
-      dockerfile: build/search/Dockerfile
+      context: ../../../
+      dockerfile: atproto/build/search/Dockerfile
+      args:
+        - GIT_COMMIT=${GIT_COMMIT:-unknown}
+        - BUILD_TIME=${BUILD_TIME:-unknown}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    image: bsky-search #:working
+    restart: unless-stopped
+    image: search
     container_name: bsky-search
     environment:
       - GIN_MODE=release
-      - LAYOUT_SERVICE_HOST=http://host.docker.internal:8087
     env_file:
-      - ../../.env
+      - ../../env/search.env
     ports:
-      - "8085:8080"
-  # bsky-search-staging:
-  #   build:
-  #     context: ../../
-  #     dockerfile: build/search/Dockerfile
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   image: bsky-search
-  #   logging:
-  #     driver: loki
-  #     options:
-  #       loki-url: "http://10.0.6.7:3100/loki/api/v1/push"
-  #   container_name: bsky-search-staging
-  #   environment:
-  #     - GIN_MODE=release
-  #     - LAYOUT_SERVICE_HOST=http://host.docker.internal:8087
-  #   env_file:
-  #     - ../../.env
-  #   ports:
-  #     - "8084:8080"
+      - "8092:8080"
+      - "8093:8081"

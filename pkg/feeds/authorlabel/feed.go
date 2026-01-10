@@ -5,8 +5,7 @@ import (
 	"fmt"
 
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store"
-	"github.com/jazware/bsky-experiments/pkg/consumer/store/store_queries"
+	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -30,10 +29,10 @@ type NotFoundError struct {
 	error
 }
 
-func NewFeed(ctx context.Context, feedActorDID string, store *store.Store) (*Feed, []string, error) {
+func NewFeed(ctx context.Context, feedActorDID string, chStore *store.Store) (*Feed, []string, error) {
 	alf := Feed{
 		FeedActorDID: feedActorDID,
-		Store:        store,
+		Store:        chStore,
 	}
 
 	labelFeeds := map[string]LabelFeed{
@@ -49,7 +48,7 @@ func NewFeed(ctx context.Context, feedActorDID string, store *store.Store) (*Fee
 		},
 	}
 
-	labels := make([]string, len(labelFeeds))
+	labels := make([]string, 0, len(labelFeeds))
 	for name := range labelFeeds {
 		labels = append(labels, name)
 	}
@@ -84,10 +83,7 @@ func (f *Feed) GetPage(ctx context.Context, feed string, userDID string, limit i
 
 	if labelFeed.Private {
 		// Ensure the user is assigned to the label before letting them view the feed
-		authorized, err := f.Store.Queries.ActorHasLabel(ctx, store_queries.ActorHasLabelParams{
-			ActorDid: userDID,
-			Label:    labelFeed.Label,
-		})
+		authorized, err := f.Store.ActorHasLabel(ctx, userDID, labelFeed.Label)
 		if err != nil {
 			span.SetAttributes(attribute.String("label_lookup_error", err.Error()))
 			return nil, nil, fmt.Errorf("error getting labels for actor: %w", err)
@@ -131,10 +127,7 @@ func (f *Feed) GetMPLSPage(ctx context.Context, userDID string, limit int64, cur
 		cursor = "~"
 	}
 
-	posts, err := f.Store.Queries.ListMPLS(ctx, store_queries.ListMPLSParams{
-		Rkey:  cursor,
-		Limit: int32(limit),
-	})
+	posts, err := f.Store.ListMPLS(ctx, cursor, int(limit))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting posts from DB for feed (%s): %w", "mpls", err)
 	}
@@ -142,7 +135,7 @@ func (f *Feed) GetMPLSPage(ctx context.Context, userDID string, limit int64, cur
 	feedPosts := []*appbsky.FeedDefs_SkeletonFeedPost{}
 	newCursor := ""
 	for _, post := range posts {
-		postAtURL := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", post.ActorDid, post.Rkey)
+		postAtURL := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", post.ActorDID, post.Rkey)
 		feedPosts = append(feedPosts, &appbsky.FeedDefs_SkeletonFeedPost{
 			Post: postAtURL,
 		})
@@ -164,10 +157,7 @@ func (f *Feed) GetTQSPPage(ctx context.Context, userDID string, limit int64, cur
 		cursor = "~"
 	}
 
-	posts, err := f.Store.Queries.ListTQSP(ctx, store_queries.ListTQSPParams{
-		Rkey:  cursor,
-		Limit: int32(limit),
-	})
+	posts, err := f.Store.ListTQSP(ctx, cursor, int(limit))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting posts from DB for feed (%s): %w", "tqsp", err)
 	}
@@ -175,7 +165,7 @@ func (f *Feed) GetTQSPPage(ctx context.Context, userDID string, limit int64, cur
 	feedPosts := []*appbsky.FeedDefs_SkeletonFeedPost{}
 	newCursor := ""
 	for _, post := range posts {
-		postAtURL := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", post.ActorDid, post.Rkey)
+		postAtURL := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", post.ActorDID, post.Rkey)
 		feedPosts = append(feedPosts, &appbsky.FeedDefs_SkeletonFeedPost{
 			Post: postAtURL,
 		})
