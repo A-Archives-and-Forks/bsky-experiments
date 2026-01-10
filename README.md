@@ -17,7 +17,7 @@ HTTP service for search, statistics, and repository maintenance. Provides site-w
 
 ```bash
 # Start services (uses sops for secret decryption)
-just common        # Start Redis
+just common        # Start Redis (and maybe Clickhouse)
 just indexer       # Start indexer
 just feedgen       # Start feed generator
 just search        # Start search service
