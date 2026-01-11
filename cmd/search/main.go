@@ -226,7 +226,12 @@ func Search(cctx *cli.Context) error {
 			if err != nil {
 				return false, nil
 			}
-			return u.Hostname() == "localhost" || u.Hostname() == "10.0.6.32", nil
+			switch u.Hostname() {
+			case "bsky.jazco.dev", "localhost", "10.0.6.40":
+				return true, nil
+			}
+
+			return false, nil
 		},
 	}))
 
