@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jazware/bsky-experiments/pkg/indexer"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
+	"github.com/jazware/bsky-experiments/pkg/plc"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -73,6 +74,24 @@ func main() {
 			Usage:   "clickhouse password",
 			Value:   "",
 			EnvVars: []string{"CLICKHOUSE_PASSWORD"},
+		},
+		&cli.BoolFlag{
+			Name:    "enable-plc-exporter",
+			Usage:   "enable the PLC directory exporter",
+			Value:   true,
+			EnvVars: []string{"ENABLE_PLC_EXPORTER"},
+		},
+		&cli.StringFlag{
+			Name:    "plc-host",
+			Usage:   "PLC directory host URL",
+			Value:   "https://plc.directory",
+			EnvVars: []string{"PLC_HOST"},
+		},
+		&cli.Float64Flag{
+			Name:    "plc-rate-limit",
+			Usage:   "PLC exporter rate limit (requests per second)",
+			Value:   1.5,
+			EnvVars: []string{"PLC_RATE_LIMIT"},
 		},
 	}
 
@@ -221,6 +240,35 @@ func Indexer(cctx *cli.Context) error {
 		}
 	}()
 
+	// Start PLC exporter if enabled
+	var plcExporter *plc.Exporter
+	shutdownPLCExporter := make(chan struct{})
+	plcExporterShutdown := make(chan struct{})
+
+	if cctx.Bool("enable-plc-exporter") {
+		var err error
+		plcExporter, err = plc.NewExporter(plc.ExporterConfig{
+			PLCHost:     cctx.String("plc-host"),
+			RateLimit:   cctx.Float64("plc-rate-limit"),
+			RedisClient: redisClient,
+			RedisPrefix: cctx.String("redis-prefix"),
+			DB:          clickhouseStore.DB,
+			Logger:      logger,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create PLC exporter: %+v", err)
+		}
+
+		go func() {
+			go plcExporter.Run()
+			<-shutdownPLCExporter
+			plcExporter.Shutdown()
+			close(plcExporterShutdown)
+		}()
+
+		logger.Info("PLC exporter started", "host", cctx.String("plc-host"))
+	}
+
 	logger.Info("connecting to websocket...", "url", u.String())
 	con, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{
 		"User-Agent": []string{"jaz-indexer/" + version.GitCommit},
@@ -286,6 +334,12 @@ func Indexer(cctx *cli.Context) error {
 	close(shutdownRepoStream)
 	close(shutdownLivenessChecker)
 	close(shutdownCursorManager)
+
+	// Shutdown PLC exporter if enabled
+	if plcExporter != nil {
+		close(shutdownPLCExporter)
+		<-plcExporterShutdown
+	}
 
 	<-repoStreamShutdown
 	<-livenessCheckerShutdown
