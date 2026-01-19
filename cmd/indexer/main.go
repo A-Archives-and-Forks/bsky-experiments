@@ -20,6 +20,7 @@ import (
 	"github.com/jazware/bsky-experiments/pkg/indexer"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"github.com/jazware/bsky-experiments/pkg/plc"
+	"github.com/jazware/bsky-experiments/pkg/profilehydrator"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -92,6 +93,30 @@ func main() {
 			Usage:   "PLC exporter rate limit (requests per second)",
 			Value:   1.5,
 			EnvVars: []string{"PLC_RATE_LIMIT"},
+		},
+		&cli.BoolFlag{
+			Name:    "enable-profile-hydrator",
+			Usage:   "enable the profile hydrator",
+			Value:   true,
+			EnvVars: []string{"ENABLE_PROFILE_HYDRATOR"},
+		},
+		&cli.StringFlag{
+			Name:    "profile-api-host",
+			Usage:   "Bluesky API host for profile fetching",
+			Value:   "https://public.api.bsky.app",
+			EnvVars: []string{"PROFILE_API_HOST"},
+		},
+		&cli.Float64Flag{
+			Name:    "profile-rate-limit",
+			Usage:   "Profile hydrator rate limit (requests per second)",
+			Value:   5.0,
+			EnvVars: []string{"PROFILE_RATE_LIMIT"},
+		},
+		&cli.IntFlag{
+			Name:    "profile-batch-size",
+			Usage:   "DIDs per API request (max 25)",
+			Value:   25,
+			EnvVars: []string{"PROFILE_BATCH_SIZE"},
 		},
 	}
 
@@ -269,6 +294,36 @@ func Indexer(cctx *cli.Context) error {
 		logger.Info("PLC exporter started", "host", cctx.String("plc-host"))
 	}
 
+	// Start profile hydrator if enabled
+	var profHydrator *profilehydrator.Hydrator
+	shutdownProfileHydrator := make(chan struct{})
+	profileHydratorShutdown := make(chan struct{})
+
+	if cctx.Bool("enable-profile-hydrator") {
+		var err error
+		profHydrator, err = profilehydrator.NewHydrator(profilehydrator.HydratorConfig{
+			APIHost:     cctx.String("profile-api-host"),
+			RateLimit:   cctx.Float64("profile-rate-limit"),
+			BatchSize:   cctx.Int("profile-batch-size"),
+			RedisClient: redisClient,
+			RedisPrefix: cctx.String("redis-prefix"),
+			DB:          clickhouseStore.DB,
+			Logger:      logger,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create profile hydrator: %+v", err)
+		}
+
+		go func() {
+			go profHydrator.Run()
+			<-shutdownProfileHydrator
+			profHydrator.Shutdown()
+			close(profileHydratorShutdown)
+		}()
+
+		logger.Info("profile hydrator started", "api_host", cctx.String("profile-api-host"))
+	}
+
 	logger.Info("connecting to websocket...", "url", u.String())
 	con, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{
 		"User-Agent": []string{"jaz-indexer/" + version.GitCommit},
@@ -339,6 +394,12 @@ func Indexer(cctx *cli.Context) error {
 	if plcExporter != nil {
 		close(shutdownPLCExporter)
 		<-plcExporterShutdown
+	}
+
+	// Shutdown profile hydrator if enabled
+	if profHydrator != nil {
+		close(shutdownProfileHydrator)
+		<-profileHydratorShutdown
 	}
 
 	<-repoStreamShutdown
