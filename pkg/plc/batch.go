@@ -97,7 +97,7 @@ func (bi *BatchInserter) insertBatch(ctx context.Context, batch []*PLCBatch) err
 		return nil
 	}
 
-	batchInsert, err := bi.db.PrepareBatch(ctx, "INSERT INTO plc_operations (did, cid, operation_type, created_at, handle, pds, operation_json, time_us)")
+	batchInsert, err := bi.db.PrepareBatch(ctx, "INSERT INTO plc_operations (did, operation_type, created_at, handle, pds, operation_json, time_us)")
 	if err != nil {
 		return fmt.Errorf("failed to prepare batch: %w", err)
 	}
@@ -105,7 +105,6 @@ func (bi *BatchInserter) insertBatch(ctx context.Context, batch []*PLCBatch) err
 	for _, op := range batch {
 		if err := batchInsert.Append(
 			op.DID,
-			op.CID,
 			op.OperationType,
 			op.CreatedAt,
 			op.Handle,

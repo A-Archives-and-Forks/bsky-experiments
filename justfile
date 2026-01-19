@@ -71,6 +71,19 @@ migrate-up:
     set -a; source env/indexer.env; set +a
     go run ./cmd/migrate up
 
+# Run pending ClickHouse migrations with extended timeout (for large data migrations)
+# timeout is in seconds, default 3600 (1 hour)
+migrate-up-long timeout="3600":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! -f env/indexer.env ]]; then
+        echo "Decrypting indexer.enc.env..."
+        sops decrypt env/indexer.enc.env > env/indexer.env
+    fi
+    set -a; source env/indexer.env; set +a
+    echo "Running migrations with {{timeout}}s read timeout..."
+    go run ./cmd/migrate --read-timeout={{timeout}} up
+
 # Rollback N migrations (default: 1)
 migrate-down steps="1":
     #!/usr/bin/env bash

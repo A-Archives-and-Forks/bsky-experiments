@@ -44,6 +44,12 @@ func main() {
 				Value:   "default",
 				EnvVars: []string{"CLICKHOUSE_DATABASE"},
 			},
+			&cli.IntFlag{
+				Name:    "read-timeout",
+				Usage:   "ClickHouse read timeout in seconds (for long migrations)",
+				Value:   0,
+				EnvVars: []string{"CLICKHOUSE_READ_TIMEOUT"},
+			},
 		},
 		Commands: []*cli.Command{
 			{
@@ -152,9 +158,10 @@ func main() {
 
 func configFromCLI(c *cli.Context) migrate.Config {
 	return migrate.Config{
-		Address:  c.String("clickhouse-address"),
-		Username: c.String("clickhouse-username"),
-		Password: c.String("clickhouse-password"),
-		Database: c.String("clickhouse-database"),
+		Address:     c.String("clickhouse-address"),
+		Username:    c.String("clickhouse-username"),
+		Password:    c.String("clickhouse-password"),
+		Database:    c.String("clickhouse-database"),
+		ReadTimeout: c.Int("read-timeout"),
 	}
 }

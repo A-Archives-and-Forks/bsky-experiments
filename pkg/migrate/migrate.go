@@ -20,10 +20,11 @@ var migrationsFS embed.FS
 
 // Config holds ClickHouse connection configuration
 type Config struct {
-	Address  string // host:port
-	Username string
-	Password string
-	Database string
+	Address     string // host:port
+	Username    string
+	Password    string
+	Database    string
+	ReadTimeout int    // read timeout in seconds (0 = default 300s)
 }
 
 // Migrator handles ClickHouse schema migrations
@@ -49,6 +50,11 @@ func NewMigrator(cfg Config, logger *slog.Logger) *Migrator {
 	// URL-encode username and password to handle special characters
 	dsn := fmt.Sprintf("clickhouse://%s?database=%s&username=%s&password=%s&x-multi-statement=true",
 		cfg.Address, cfg.Database, url.QueryEscape(cfg.Username), url.QueryEscape(cfg.Password))
+
+	// Add read timeout if specified (for long-running migrations)
+	if cfg.ReadTimeout > 0 {
+		dsn = fmt.Sprintf("%s&read_timeout=%ds", dsn, cfg.ReadTimeout)
+	}
 
 	return &Migrator{config: cfg, dsn: dsn, logger: logger}
 }

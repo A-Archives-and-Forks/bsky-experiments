@@ -211,7 +211,6 @@ func (e *Exporter) fetchAndProcessPage(ctx context.Context) (int, error) {
 		// Add to batch
 		e.batchInserter.Add(&PLCBatch{
 			DID:           op.DID,
-			CID:           op.CID,
 			OperationType: opType,
 			CreatedAt:     op.CreatedAt,
 			Handle:        handle,

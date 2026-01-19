@@ -45,7 +45,6 @@ type Service struct {
 // PLCBatch represents a batch of PLC operations for ClickHouse insertion
 type PLCBatch struct {
 	DID           string
-	CID           string
 	OperationType string
 	CreatedAt     time.Time
 	Handle        string
