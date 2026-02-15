@@ -1,0 +1,16 @@
+services:
+  crawler:
+    build:
+      context: ../../../
+      dockerfile: atproto/build/crawler/Dockerfile
+      args:
+        - GIT_COMMIT=${GIT_COMMIT:-unknown}
+        - BUILD_TIME=${BUILD_TIME:-unknown}
+    network_mode: host
+    restart: unless-stopped
+    image: crawler
+    container_name: atproto-crawler
+    env_file:
+      - ../../env/crawler.env
+    volumes:
+      - /secundus/Documents/atproto/crawler/data:/data/rca

@@ -22,6 +22,8 @@ indexer-down:
 feedgen:
     #!/usr/bin/env bash
     set -euo pipefail
+    echo "Building dashboard..."
+    just dashboard-build
     echo "Decrypting feedgen.enc.env..."
     sops decrypt env/feedgen.enc.env > env/feedgen.env
     echo "Starting feedgen service with Docker Compose..."
@@ -46,6 +48,29 @@ search:
 search-down:
     @echo "Stopping search service with Docker Compose..."
     docker compose -f build/search/docker-compose.yml down
+
+crawler:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Decrypting crawler.enc.env..."
+    sops decrypt env/crawler.enc.env > env/crawler.env
+    echo "Starting crawler service with Docker Compose..."
+    export GIT_COMMIT=$(git rev-parse --short HEAD)
+    export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    docker compose -f build/crawler/docker-compose.yml up --build -d
+
+crawler-down:
+    @echo "Stopping crawler service with Docker Compose..."
+    docker compose -f build/crawler/docker-compose.yml down
+
+crawler-reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Decrypting crawler.enc.env..."
+    sops decrypt env/crawler.enc.env > env/crawler.env
+    set -a; source env/crawler.env; set +a
+    echo "Clearing crawl data and Redis state..."
+    go run ./cmd/crawler reset --output-dir /secundus/Documents/atproto/crawler/data
 
 # Bring up Redis and other common services
 common:
@@ -140,3 +165,28 @@ migrate-dump-schema:
     fi
     set -a; source env/indexer.env; set +a
     go run ./cmd/migrate dump-schema -o ../../.claude/skills/clickhouse-analyst/references/databases/default/_full_schema.sql
+
+# ============================================================================
+# Dashboard
+# ============================================================================
+
+# Build the dashboard (React SPA)
+dashboard-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd dashboard
+    echo "Installing dependencies..."
+    pnpm install
+    echo "Building dashboard..."
+    pnpm build
+    echo "Dashboard built successfully"
+
+# Start the dashboard development server
+dashboard-dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd dashboard
+    echo "Installing dependencies..."
+    pnpm install
+    echo "Starting dev server at http://localhost:3001/dashboard/"
+    pnpm dev

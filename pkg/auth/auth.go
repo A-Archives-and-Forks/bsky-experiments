@@ -96,7 +96,8 @@ func NewAuth(
 		HTTPClient:          client,
 		TryAuthoritativeDNS: true,
 		// primary Bluesky PDS instance only supports HTTP resolution method
-		SkipDNSDomainSuffixes: []string{".bsky.social"},
+		SkipDNSDomainSuffixes:  []string{".bsky.social"},
+		SkipHandleVerification: true,
 	}
 	dir := identity.NewCacheDirectory(&baseDir, keyCacheSize, keyCacheTTL, time.Minute*2, keyCacheTTL)
 
@@ -141,12 +142,12 @@ func (auth *Auth) GetClaimsFromAuthHeader(ctx context.Context, authHeader string
 			entry, ok := auth.KeyCache.Get(userDID)
 			if ok && entry.ExpiresAt.After(time.Now()) {
 				cacheHits.WithLabelValues("key").Inc()
-				span.SetAttributes(attribute.Bool("caches.keys.hit", true))
+				span.SetAttributes(attribute.Bool("cache.key.hit", true))
 				return entry.Key, nil
 			}
 
 			cacheMisses.WithLabelValues("key").Inc()
-			span.SetAttributes(attribute.Bool("caches.keys.hit", false))
+			span.SetAttributes(attribute.Bool("cache.key.hit", false))
 
 			did, err := syntax.ParseDID(userDID)
 			if err != nil {
@@ -217,8 +218,8 @@ func (auth *Auth) AuthenticateRequestViaJWT(next echo.HandlerFunc) echo.HandlerF
 		}
 
 		// Set claims Issuer to context as user DID
-		c.Set("user_did", claims.Issuer)
-		span.SetAttributes(attribute.String("user.did", claims.Issuer))
+		c.Set("actor_did", claims.Issuer)
+		span.SetAttributes(attribute.String("actor.did", claims.Issuer))
 		span.End()
 		return next(c)
 	}

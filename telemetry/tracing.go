@@ -75,11 +75,14 @@ func newTraceProvider(exp sdktrace.SpanExporter, serviceName string, sampleRatio
 		semconv.ServiceName(serviceName),
 	)
 
-	// initialize the traceIDRatioBasedSampler
-	traceIDRatioBasedSampler := sdktrace.TraceIDRatioBased(sampleRatio)
+	// ParentBased wraps the ratio sampler so that child spans inherit their
+	// parent's sampling decision. Without this, library code (e.g. indigo)
+	// that creates spans via the global tracer gets sampled independently,
+	// generating millions of unwanted spans.
+	sampler := sdktrace.ParentBased(sdktrace.TraceIDRatioBased(sampleRatio))
 
 	return sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(traceIDRatioBasedSampler),
+		sdktrace.WithSampler(sampler),
 		sdktrace.WithBatcher(exp),
 		sdktrace.WithResource(r),
 	)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // DailyStatsRow represents a daily statistics summary
@@ -21,7 +23,11 @@ type DailyStatsRow struct {
 
 // GetDailyStats retrieves daily statistics summaries from the materialized view
 // and merges with historical backfilled data
-func (s *Store) GetDailyStats(ctx context.Context, limit int) ([]DailyStatsRow, error) {
+func (s *Store) GetDailyStats(ctx context.Context, limit int) (stats []DailyStatsRow, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.Int("limit", limit))
+	defer func() { done(attribute.Int("result.count", len(stats))) }()
+
 	query := `
 		SELECT
 			date,
@@ -73,7 +79,6 @@ func (s *Store) GetDailyStats(ctx context.Context, limit int) ([]DailyStatsRow, 
 	}
 	defer rows.Close()
 
-	var stats []DailyStatsRow
 	for rows.Next() {
 		var row DailyStatsRow
 		if err := rows.Scan(
@@ -92,5 +97,8 @@ func (s *Store) GetDailyStats(ctx context.Context, limit int) ([]DailyStatsRow, 
 		stats = append(stats, row)
 	}
 
-	return stats, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return stats, nil
 }

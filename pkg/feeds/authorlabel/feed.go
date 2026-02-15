@@ -22,8 +22,11 @@ type LabelFeed struct {
 	GetPage func(ctx context.Context, userDID string, limit int64, cursor string) ([]*appbsky.FeedDefs_SkeletonFeedPost, *string, error)
 }
 
-var privateFeedInstructionsPost = "at://did:plc:q6gjnaw2blty4crticxkmujt/app.bsky.feed.post/3jwvwlajglc2w"
-var unauthorizedResponse = []*appbsky.FeedDefs_SkeletonFeedPost{{Post: privateFeedInstructionsPost}}
+var unauthorizedResponse = []*appbsky.FeedDefs_SkeletonFeedPost{
+	{Post: "at://did:plc:wksnvmuo52yo3a32hkxdq4kb/app.bsky.feed.post/3l3frqadlo32h"},
+	{Post: "at://did:plc:wksnvmuo52yo3a32hkxdq4kb/app.bsky.feed.post/3l3frryudoz2i"},
+	{Post: "at://did:plc:wksnvmuo52yo3a32hkxdq4kb/app.bsky.feed.post/3l3frupeayv2e"},
+}
 
 type NotFoundError struct {
 	error
@@ -65,19 +68,19 @@ func (f *Feed) GetPage(ctx context.Context, feed string, userDID string, limit i
 
 	span.SetAttributes(
 		attribute.String("feed", feed),
-		attribute.String("user_did", userDID),
+		attribute.String("actor.did", userDID),
 		attribute.Int64("limit", limit),
 		attribute.String("cursor", cursor),
 	)
 
 	if userDID == "" {
-		span.SetAttributes(attribute.Bool("feed.author.not_authorized", true))
+		span.SetAttributes(attribute.Bool("actor.not_authorized", true))
 		return unauthorizedResponse, nil, nil
 	}
 
 	labelFeed, ok := f.Labels[feed]
 	if !ok {
-		span.SetAttributes(attribute.String("invalid_label", feed))
+		span.SetAttributes(attribute.String("label.invalid", feed))
 		return nil, nil, NotFoundError{fmt.Errorf("feed not found")}
 	}
 
@@ -85,12 +88,12 @@ func (f *Feed) GetPage(ctx context.Context, feed string, userDID string, limit i
 		// Ensure the user is assigned to the label before letting them view the feed
 		authorized, err := f.Store.ActorHasLabel(ctx, userDID, labelFeed.Label)
 		if err != nil {
-			span.SetAttributes(attribute.String("label_lookup_error", err.Error()))
+			span.SetAttributes(attribute.String("label.lookup_error", err.Error()))
 			return nil, nil, fmt.Errorf("error getting labels for actor: %w", err)
 		}
 
 		if !authorized {
-			span.SetAttributes(attribute.Bool("actor_not_authorized", true))
+			span.SetAttributes(attribute.Bool("actor.not_authorized", true))
 			return unauthorizedResponse, nil, nil
 		}
 	}

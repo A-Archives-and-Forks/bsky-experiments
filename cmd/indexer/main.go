@@ -97,7 +97,7 @@ func main() {
 		&cli.BoolFlag{
 			Name:    "enable-profile-hydrator",
 			Usage:   "enable the profile hydrator",
-			Value:   true,
+			Value:   false,
 			EnvVars: []string{"ENABLE_PROFILE_HYDRATOR"},
 		},
 		&cli.StringFlag{
@@ -337,7 +337,6 @@ func Indexer(cctx *cli.Context) error {
 	scheduler := parallel.NewScheduler(200, "jetstream-indexer", slog.Default(), idx.OnEvent)
 
 	conf := jetstreamclient.DefaultClientConfig()
-	conf.WantedCollections = []string{"app.bsky.*"}
 	conf.WebsocketURL = u.String()
 	conf.Compress = true
 	jetstreamClient, err := jetstreamclient.NewClient(conf, slog.Default(), scheduler)

@@ -1,4 +1,24 @@
-# Stage 1: Build the Go binary
+# Stage 1: Build the dashboard
+FROM node:22-alpine AS dashboard-builder
+
+WORKDIR /app/dashboard
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy package files first for better caching
+COPY atproto/dashboard/package.json atproto/dashboard/pnpm-lock.yaml* ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile || pnpm install
+
+# Copy dashboard source
+COPY atproto/dashboard/ ./
+
+# Build the dashboard
+RUN pnpm build
+
+# Stage 2: Build the Go binary
 FROM golang:1.25.5 AS builder
 
 # Build args for version info
@@ -26,6 +46,10 @@ RUN go mod download
 # Copy relevant source files
 COPY atproto/pkg ./pkg
 COPY atproto/cmd/feedgen ./cmd/feedgen
+
+# Copy the built dashboard from the previous stage
+COPY --from=dashboard-builder /app/dashboard/dist ./dashboard/dist
+COPY atproto/dashboard/embed.go ./dashboard/embed.go
 
 # Build the application with version info
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \

@@ -179,7 +179,7 @@ func (i *Indexer) OnCommit(ctx context.Context, evt *models.Event) error {
 	span.SetAttributes(attribute.String("collection", evt.Commit.Collection))
 	span.SetAttributes(attribute.String("rkey", evt.Commit.RKey))
 	span.SetAttributes(attribute.Int64("seq", evt.TimeUS))
-	span.SetAttributes(attribute.String("event_kind", evt.Commit.Operation))
+	span.SetAttributes(attribute.String("event.kind", evt.Commit.Operation))
 
 	opsProcessedCounter.WithLabelValues(evt.Commit.Operation, evt.Commit.Collection, i.SocketURL).Inc()
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // RepoCleanupJob represents a repo cleanup job
@@ -23,7 +25,13 @@ type RepoCleanupJob struct {
 }
 
 // UpsertRepoCleanupJob creates or updates a repo cleanup job
-func (s *Store) UpsertRepoCleanupJob(ctx context.Context, job RepoCleanupJob) (*RepoCleanupJob, error) {
+func (s *Store) UpsertRepoCleanupJob(ctx context.Context, job RepoCleanupJob) (result *RepoCleanupJob, err error) {
+	_, done := observe(ctx, "exec", &err,
+		attribute.String("job.id", job.JobID),
+		attribute.String("repo", job.Repo),
+		attribute.String("job.state", job.JobState))
+	defer done()
+
 	timeUs := time.Now().UnixMicro()
 
 	query := `
@@ -34,7 +42,7 @@ func (s *Store) UpsertRepoCleanupJob(ctx context.Context, job RepoCleanupJob) (*
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	err := s.DB.Exec(ctx, query,
+	err = s.DB.Exec(ctx, query,
 		job.JobID,
 		job.Repo,
 		job.RefreshToken,
@@ -57,7 +65,11 @@ func (s *Store) UpsertRepoCleanupJob(ctx context.Context, job RepoCleanupJob) (*
 }
 
 // GetRepoCleanupJob retrieves a specific cleanup job by ID
-func (s *Store) GetRepoCleanupJob(ctx context.Context, jobID string) (*RepoCleanupJob, error) {
+func (s *Store) GetRepoCleanupJob(ctx context.Context, jobID string) (job *RepoCleanupJob, err error) {
+	ctx, done := observe(ctx, "query_row", &err,
+		attribute.String("job.id", jobID))
+	defer done()
+
 	query := `
 		SELECT
 			job_id, repo, refresh_token, cleanup_types, delete_older_than,
@@ -69,8 +81,8 @@ func (s *Store) GetRepoCleanupJob(ctx context.Context, jobID string) (*RepoClean
 		LIMIT 1
 	`
 
-	var job RepoCleanupJob
-	err := s.DB.QueryRow(ctx, query, jobID).Scan(
+	job = &RepoCleanupJob{}
+	err = s.DB.QueryRow(ctx, query, jobID).Scan(
 		&job.JobID,
 		&job.Repo,
 		&job.RefreshToken,
@@ -88,11 +100,16 @@ func (s *Store) GetRepoCleanupJob(ctx context.Context, jobID string) (*RepoClean
 		return nil, fmt.Errorf("failed to get repo cleanup job: %w", err)
 	}
 
-	return &job, nil
+	return job, nil
 }
 
 // GetCleanupJobsByRepo retrieves cleanup jobs for a specific repo
-func (s *Store) GetCleanupJobsByRepo(ctx context.Context, repo string, limit int) ([]RepoCleanupJob, error) {
+func (s *Store) GetCleanupJobsByRepo(ctx context.Context, repo string, limit int) (jobs []RepoCleanupJob, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.String("repo", repo),
+		attribute.Int("limit", limit))
+	defer func() { done(attribute.Int("result.count", len(jobs))) }()
+
 	query := `
 		SELECT
 			job_id, repo, refresh_token, cleanup_types, delete_older_than,
@@ -110,7 +127,6 @@ func (s *Store) GetCleanupJobsByRepo(ctx context.Context, repo string, limit int
 	}
 	defer rows.Close()
 
-	var jobs []RepoCleanupJob
 	for rows.Next() {
 		var job RepoCleanupJob
 		if err := rows.Scan(
@@ -132,11 +148,18 @@ func (s *Store) GetCleanupJobsByRepo(ctx context.Context, repo string, limit int
 		jobs = append(jobs, job)
 	}
 
-	return jobs, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 // GetRunningCleanupJobsByRepo retrieves running cleanup jobs for a specific repo
-func (s *Store) GetRunningCleanupJobsByRepo(ctx context.Context, repo string) ([]RepoCleanupJob, error) {
+func (s *Store) GetRunningCleanupJobsByRepo(ctx context.Context, repo string) (jobs []RepoCleanupJob, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.String("repo", repo))
+	defer func() { done(attribute.Int("result.count", len(jobs))) }()
+
 	query := `
 		SELECT
 			job_id, repo, refresh_token, cleanup_types, delete_older_than,
@@ -153,7 +176,6 @@ func (s *Store) GetRunningCleanupJobsByRepo(ctx context.Context, repo string) ([
 	}
 	defer rows.Close()
 
-	var jobs []RepoCleanupJob
 	for rows.Next() {
 		var job RepoCleanupJob
 		if err := rows.Scan(
@@ -175,11 +197,18 @@ func (s *Store) GetRunningCleanupJobsByRepo(ctx context.Context, repo string) ([
 		jobs = append(jobs, job)
 	}
 
-	return jobs, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 // GetRunningCleanupJobs retrieves running cleanup jobs (limited)
-func (s *Store) GetRunningCleanupJobs(ctx context.Context, limit int) ([]RepoCleanupJob, error) {
+func (s *Store) GetRunningCleanupJobs(ctx context.Context, limit int) (jobs []RepoCleanupJob, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.Int("limit", limit))
+	defer func() { done(attribute.Int("result.count", len(jobs))) }()
+
 	query := `
 		SELECT
 			job_id, repo, refresh_token, cleanup_types, delete_older_than,
@@ -197,7 +226,6 @@ func (s *Store) GetRunningCleanupJobs(ctx context.Context, limit int) ([]RepoCle
 	}
 	defer rows.Close()
 
-	var jobs []RepoCleanupJob
 	for rows.Next() {
 		var job RepoCleanupJob
 		if err := rows.Scan(
@@ -219,7 +247,10 @@ func (s *Store) GetRunningCleanupJobs(ctx context.Context, limit int) ([]RepoCle
 		jobs = append(jobs, job)
 	}
 
-	return jobs, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 // CleanupStats represents aggregated cleanup statistics
@@ -230,7 +261,10 @@ type CleanupStats struct {
 }
 
 // GetCleanupStats retrieves aggregate cleanup statistics
-func (s *Store) GetCleanupStats(ctx context.Context) (*CleanupStats, error) {
+func (s *Store) GetCleanupStats(ctx context.Context) (stats *CleanupStats, err error) {
+	ctx, done := observe(ctx, "query_row", &err)
+	defer done()
+
 	query := `
 		SELECT
 			sum(num_deleted) AS total_num_deleted,
@@ -239,8 +273,8 @@ func (s *Store) GetCleanupStats(ctx context.Context) (*CleanupStats, error) {
 		FROM repo_cleanup_jobs
 	`
 
-	var stats CleanupStats
-	err := s.DB.QueryRow(ctx, query).Scan(
+	stats = &CleanupStats{}
+	err = s.DB.QueryRow(ctx, query).Scan(
 		&stats.TotalNumDeleted,
 		&stats.NumJobs,
 		&stats.NumRepos,
@@ -249,7 +283,7 @@ func (s *Store) GetCleanupStats(ctx context.Context) (*CleanupStats, error) {
 		return nil, fmt.Errorf("failed to get cleanup stats: %w", err)
 	}
 
-	return &stats, nil
+	return stats, nil
 }
 
 // DeleteRepoCleanupJob deletes a cleanup job (soft delete via inserting new version with deleted state)

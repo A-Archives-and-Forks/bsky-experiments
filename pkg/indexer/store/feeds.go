@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // HotPost represents a trending post with engagement score
@@ -20,7 +22,12 @@ type HotPost struct {
 }
 
 // GetHotPosts retrieves hot/trending posts ordered by score
-func (s *Store) GetHotPosts(ctx context.Context, limit int, minScore float64) ([]HotPost, error) {
+func (s *Store) GetHotPosts(ctx context.Context, limit int, minScore float64) (posts []HotPost, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.Int("limit", limit),
+		attribute.Float64("min.score", minScore))
+	defer func() { done(attribute.Int("result.count", len(posts))) }()
+
 	query := `
 		SELECT
 			subject_uri,
@@ -44,7 +51,6 @@ func (s *Store) GetHotPosts(ctx context.Context, limit int, minScore float64) ([
 	}
 	defer rows.Close()
 
-	var posts []HotPost
 	for rows.Next() {
 		var post HotPost
 		if err := rows.Scan(
@@ -63,11 +69,19 @@ func (s *Store) GetHotPosts(ctx context.Context, limit int, minScore float64) ([
 		posts = append(posts, post)
 	}
 
-	return posts, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return posts, nil
 }
 
 // GetTopPostsInWindow retrieves top posts by like count within a time window
-func (s *Store) GetTopPostsInWindow(ctx context.Context, hours int, limit int) ([]HotPost, error) {
+func (s *Store) GetTopPostsInWindow(ctx context.Context, hours int, limit int) (posts []HotPost, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.Int("hours", hours),
+		attribute.Int("limit", limit))
+	defer func() { done(attribute.Int("result.count", len(posts))) }()
+
 	query := `
 		SELECT
 			p.uri AS subject_uri,
@@ -100,7 +114,6 @@ func (s *Store) GetTopPostsInWindow(ctx context.Context, hours int, limit int) (
 	}
 	defer rows.Close()
 
-	var posts []HotPost
 	for rows.Next() {
 		var post HotPost
 		if err := rows.Scan(
@@ -118,7 +131,10 @@ func (s *Store) GetTopPostsInWindow(ctx context.Context, hours int, limit int) (
 		posts = append(posts, post)
 	}
 
-	return posts, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return posts, nil
 }
 
 // LabelPost represents a post from a label feed
@@ -129,7 +145,12 @@ type LabelPost struct {
 }
 
 // ListMPLS retrieves posts from the mpls feed
-func (s *Store) ListMPLS(ctx context.Context, cursor string, limit int) ([]LabelPost, error) {
+func (s *Store) ListMPLS(ctx context.Context, cursor string, limit int) (posts []LabelPost, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.String("cursor", cursor),
+		attribute.Int("limit", limit))
+	defer func() { done(attribute.Int("result.count", len(posts))) }()
+
 	query := `
 		SELECT actor_did, rkey, created_at
 		FROM mpls
@@ -144,7 +165,6 @@ func (s *Store) ListMPLS(ctx context.Context, cursor string, limit int) ([]Label
 	}
 	defer rows.Close()
 
-	var posts []LabelPost
 	for rows.Next() {
 		var post LabelPost
 		if err := rows.Scan(&post.ActorDID, &post.Rkey, &post.CreatedAt); err != nil {
@@ -153,11 +173,19 @@ func (s *Store) ListMPLS(ctx context.Context, cursor string, limit int) ([]Label
 		posts = append(posts, post)
 	}
 
-	return posts, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return posts, nil
 }
 
 // ListTQSP retrieves posts from the tqsp feed
-func (s *Store) ListTQSP(ctx context.Context, cursor string, limit int) ([]LabelPost, error) {
+func (s *Store) ListTQSP(ctx context.Context, cursor string, limit int) (posts []LabelPost, err error) {
+	ctx, done := observe(ctx, "query", &err,
+		attribute.String("cursor", cursor),
+		attribute.Int("limit", limit))
+	defer func() { done(attribute.Int("result.count", len(posts))) }()
+
 	query := `
 		SELECT actor_did, rkey, created_at
 		FROM tqsp
@@ -172,7 +200,6 @@ func (s *Store) ListTQSP(ctx context.Context, cursor string, limit int) ([]Label
 	}
 	defer rows.Close()
 
-	var posts []LabelPost
 	for rows.Next() {
 		var post LabelPost
 		if err := rows.Scan(&post.ActorDID, &post.Rkey, &post.CreatedAt); err != nil {
@@ -181,5 +208,8 @@ func (s *Store) ListTQSP(ctx context.Context, cursor string, limit int) ([]Label
 		posts = append(posts, post)
 	}
 
-	return posts, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return posts, nil
 }

@@ -16,13 +16,13 @@ const (
 
 // RecordBatch represents a batch of records to insert into repo_records
 type RecordBatch struct {
-	Repo        string
-	Collection  string
-	RKey        string
-	Operation   string
-	RecordJSON  string
-	CreatedAt   time.Time
-	TimeUS      int64
+	Repo       string
+	Collection string
+	RKey       string
+	Operation  string
+	RecordJSON string
+	CreatedAt  time.Time
+	TimeUS     int64
 }
 
 // FollowBatch represents a batch of follows
@@ -86,21 +86,32 @@ type PostBatch struct {
 	TimeUS           int64
 }
 
+// FeedRequestAnalyticsBatch represents a batch of feed request analytics
+type FeedRequestAnalyticsBatch struct {
+	UserDID        string
+	FeedName       string
+	LimitRequested uint16
+	HasCursor      uint8
+	RequestedAt    time.Time
+	TimeUS         int64
+}
+
 // BatchInserter handles batched inserts to ClickHouse
 type BatchInserter struct {
 	store  *Store
 	logger *slog.Logger
 
-	recordQueue chan *RecordBatch
-	followQueue chan *FollowBatch
-	likeQueue   chan *LikeBatch
-	repostQueue chan *RepostBatch
-	blockQueue  chan *BlockBatch
-	postQueue   chan *PostBatch
+	recordQueue    chan *RecordBatch
+	followQueue    chan *FollowBatch
+	likeQueue      chan *LikeBatch
+	repostQueue    chan *RepostBatch
+	blockQueue     chan *BlockBatch
+	postQueue      chan *PostBatch
+	analyticsQueue chan *FeedRequestAnalyticsBatch
 
-	wg       sync.WaitGroup
-	ctx      context.Context
-	cancel   context.CancelFunc
+	wg     sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewBatchInserter creates a new batch inserter
@@ -108,26 +119,28 @@ func NewBatchInserter(store *Store, logger *slog.Logger) *BatchInserter {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	bi := &BatchInserter{
-		store:       store,
-		logger:      logger,
-		recordQueue: make(chan *RecordBatch, DefaultQueueSize),
-		followQueue: make(chan *FollowBatch, DefaultQueueSize),
-		likeQueue:   make(chan *LikeBatch, DefaultQueueSize),
-		repostQueue: make(chan *RepostBatch, DefaultQueueSize),
-		blockQueue:  make(chan *BlockBatch, DefaultQueueSize),
-		postQueue:   make(chan *PostBatch, DefaultQueueSize),
-		ctx:         ctx,
-		cancel:      cancel,
+		store:          store,
+		logger:         logger,
+		recordQueue:    make(chan *RecordBatch, DefaultQueueSize),
+		followQueue:    make(chan *FollowBatch, DefaultQueueSize),
+		likeQueue:      make(chan *LikeBatch, DefaultQueueSize),
+		repostQueue:    make(chan *RepostBatch, DefaultQueueSize),
+		blockQueue:     make(chan *BlockBatch, DefaultQueueSize),
+		postQueue:      make(chan *PostBatch, DefaultQueueSize),
+		analyticsQueue: make(chan *FeedRequestAnalyticsBatch, DefaultQueueSize),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	// Start batch workers
-	bi.wg.Add(6)
+	bi.wg.Add(7)
 	go bi.recordBatchWorker()
 	go bi.followBatchWorker()
 	go bi.likeBatchWorker()
 	go bi.repostBatchWorker()
 	go bi.blockBatchWorker()
 	go bi.postBatchWorker()
+	go bi.analyticsBatchWorker()
 
 	return bi
 }
@@ -160,6 +173,11 @@ func (bi *BatchInserter) AddBlock(block *BlockBatch) {
 // AddPost adds a post to the batch queue
 func (bi *BatchInserter) AddPost(post *PostBatch) {
 	bi.postQueue <- post
+}
+
+// AddFeedRequestAnalytics adds a feed request analytics entry to the batch queue
+func (bi *BatchInserter) AddFeedRequestAnalytics(analytics *FeedRequestAnalyticsBatch) {
+	bi.analyticsQueue <- analytics
 }
 
 // recordBatchWorker processes batches of repo_records
@@ -353,10 +371,13 @@ func (bi *BatchInserter) blockBatchWorker() {
 }
 
 // insertRecordBatch inserts a batch of records into repo_records table
-func (bi *BatchInserter) insertRecordBatch(ctx context.Context, batch []*RecordBatch) error {
+func (bi *BatchInserter) insertRecordBatch(ctx context.Context, batch []*RecordBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
 	}
+
+	ctx, done := observeBatchOp(ctx, "repo_records", len(batch), &err)
+	defer done()
 
 	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO repo_records (repo, collection, rkey, operation, record_json, created_at, time_us)")
 	if err != nil {
@@ -381,10 +402,13 @@ func (bi *BatchInserter) insertRecordBatch(ctx context.Context, batch []*RecordB
 }
 
 // insertFollowBatch inserts a batch of follows
-func (bi *BatchInserter) insertFollowBatch(ctx context.Context, batch []*FollowBatch) error {
+func (bi *BatchInserter) insertFollowBatch(ctx context.Context, batch []*FollowBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
 	}
+
+	ctx, done := observeBatchOp(ctx, "follows", len(batch), &err)
+	defer done()
 
 	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO follows (actor_did, target_did, rkey, created_at, deleted, time_us)")
 	if err != nil {
@@ -408,10 +432,13 @@ func (bi *BatchInserter) insertFollowBatch(ctx context.Context, batch []*FollowB
 }
 
 // insertLikeBatch inserts a batch of likes
-func (bi *BatchInserter) insertLikeBatch(ctx context.Context, batch []*LikeBatch) error {
+func (bi *BatchInserter) insertLikeBatch(ctx context.Context, batch []*LikeBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
 	}
+
+	ctx, done := observeBatchOp(ctx, "likes", len(batch), &err)
+	defer done()
 
 	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO likes (actor_did, subject_uri, subject_did, subject_collection, subject_rkey, rkey, created_at, deleted, time_us)")
 	if err != nil {
@@ -438,10 +465,13 @@ func (bi *BatchInserter) insertLikeBatch(ctx context.Context, batch []*LikeBatch
 }
 
 // insertRepostBatch inserts a batch of reposts
-func (bi *BatchInserter) insertRepostBatch(ctx context.Context, batch []*RepostBatch) error {
+func (bi *BatchInserter) insertRepostBatch(ctx context.Context, batch []*RepostBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
 	}
+
+	ctx, done := observeBatchOp(ctx, "reposts", len(batch), &err)
+	defer done()
 
 	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO reposts (actor_did, subject_uri, subject_did, subject_collection, subject_rkey, rkey, created_at, deleted, time_us)")
 	if err != nil {
@@ -468,10 +498,13 @@ func (bi *BatchInserter) insertRepostBatch(ctx context.Context, batch []*RepostB
 }
 
 // insertBlockBatch inserts a batch of blocks
-func (bi *BatchInserter) insertBlockBatch(ctx context.Context, batch []*BlockBatch) error {
+func (bi *BatchInserter) insertBlockBatch(ctx context.Context, batch []*BlockBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
 	}
+
+	ctx, done := observeBatchOp(ctx, "blocks", len(batch), &err)
+	defer done()
 
 	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO blocks (actor_did, target_did, rkey, created_at, deleted, time_us)")
 	if err != nil {
@@ -533,10 +566,13 @@ func (bi *BatchInserter) postBatchWorker() {
 }
 
 // insertPostBatch inserts a batch of posts
-func (bi *BatchInserter) insertPostBatch(ctx context.Context, batch []*PostBatch) error {
+func (bi *BatchInserter) insertPostBatch(ctx context.Context, batch []*PostBatch) (err error) {
 	if len(batch) == 0 {
 		return nil
 	}
+
+	ctx, done := observeBatchOp(ctx, "posts", len(batch), &err)
+	defer done()
 
 	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO posts (did, rkey, uri, created_at, text, langs, has_embedded_media, parent_uri, root_uri, deleted, time_us)")
 	if err != nil {
@@ -556,6 +592,74 @@ func (bi *BatchInserter) insertPostBatch(ctx context.Context, batch []*PostBatch
 			post.RootURI,
 			post.Deleted,
 			post.TimeUS,
+		); err != nil {
+			return fmt.Errorf("failed to append to batch: %w", err)
+		}
+	}
+
+	return batchInsert.Send()
+}
+
+// analyticsBatchWorker processes batches of feed request analytics
+func (bi *BatchInserter) analyticsBatchWorker() {
+	defer bi.wg.Done()
+
+	ticker := time.NewTicker(FlushInterval)
+	defer ticker.Stop()
+
+	var batch []*FeedRequestAnalyticsBatch
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		if err := bi.insertAnalyticsBatch(bi.ctx, batch); err != nil {
+			bi.logger.Error("failed to insert analytics batch", "error", err, "batch_size", len(batch))
+		} else {
+			bi.logger.Debug("inserted analytics batch", "batch_size", len(batch))
+		}
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-bi.ctx.Done():
+			flush()
+			return
+		case <-ticker.C:
+			flush()
+		case analytics := <-bi.analyticsQueue:
+			batch = append(batch, analytics)
+			if len(batch) >= MaxBatchSize {
+				flush()
+			}
+		}
+	}
+}
+
+// insertAnalyticsBatch inserts a batch of feed request analytics
+func (bi *BatchInserter) insertAnalyticsBatch(ctx context.Context, batch []*FeedRequestAnalyticsBatch) (err error) {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	ctx, done := observeBatchOp(ctx, "feed_request_analytics", len(batch), &err)
+	defer done()
+
+	batchInsert, err := bi.store.DB.PrepareBatch(ctx, "INSERT INTO feed_request_analytics (user_did, feed_name, limit_requested, has_cursor, requested_at, time_us)")
+	if err != nil {
+		return fmt.Errorf("failed to prepare batch: %w", err)
+	}
+
+	for _, analytics := range batch {
+		if err := batchInsert.Append(
+			analytics.UserDID,
+			analytics.FeedName,
+			analytics.LimitRequested,
+			analytics.HasCursor,
+			analytics.RequestedAt,
+			analytics.TimeUS,
 		); err != nil {
 			return fmt.Errorf("failed to append to batch: %w", err)
 		}

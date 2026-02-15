@@ -139,6 +139,11 @@ func FeedGenerator(cctx *cli.Context) error {
 	defer chStore.Close()
 	logger.Info("connected to clickhouse")
 
+	// Create batch inserter for analytics
+	logger.Info("creating batch inserter")
+	batchInserter := store.NewBatchInserter(chStore, logger)
+	defer batchInserter.Shutdown()
+
 	// Connect to Redis
 	logger.Info("connecting to redis", "address", cctx.String("redis-address"))
 	redisClient := redis.NewClient(&redis.Options{
@@ -175,7 +180,7 @@ func FeedGenerator(cctx *cli.Context) error {
 		return fmt.Errorf("failed to create FeedGenerator: %w", err)
 	}
 
-	endpoints, err := endpoints.NewEndpoints(feedGenerator, chStore)
+	endpoints, err := endpoints.NewEndpoints(feedGenerator, chStore, batchInserter)
 	if err != nil {
 		return fmt.Errorf("failed to create Endpoints: %w", err)
 	}
@@ -240,8 +245,8 @@ func FeedGenerator(cctx *cli.Context) error {
 	// CORS middleware
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"https://bsky.jazco.dev"},
-		AllowMethods: []string{http.MethodGet, http.MethodOptions},
-		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentLength, echo.HeaderContentType},
+		AllowMethods: []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentLength, echo.HeaderContentType, "X-API-Key"},
 		AllowOriginFunc: func(origin string) (bool, error) {
 			u, err := url.Parse(origin)
 			if err != nil {
@@ -277,17 +282,27 @@ func FeedGenerator(cctx *cli.Context) error {
 	jwtGroup.GET("/xrpc/app.bsky.feed.getFeedSkeleton", endpoints.GetFeedSkeleton)
 	jwtGroup.GET("/xrpc/app.bsky.feed.describeFeedGenerator", endpoints.DescribeFeedGenerator)
 
-	// Admin routes (protected by JWT)
-	adminRoutes := jwtGroup.Group("/admin")
-	adminRoutes.GET("/feeds", endpoints.GetFeeds)
-	adminRoutes.Static("/dashboard", "./public")
+	// Admin API routes (protected by API Key) - new paths for dashboard
+	adminAPIGroup := e.Group("/api/admin")
+	adminAPIGroup.Use(auther.AuthenticateRequestViaAPIKey)
+	adminAPIGroup.GET("/feeds", endpoints.GetFeeds)
+	adminAPIGroup.GET("/feed_members", endpoints.GetFeedMembersPaginated)
+	adminAPIGroup.PUT("/feed_members", endpoints.AssignUserToFeed)
+	adminAPIGroup.DELETE("/feed_members", endpoints.UnassignUserFromFeed)
 
-	// API Key Auth routes
-	apiKeyGroup := e.Group("")
-	apiKeyGroup.Use(auther.AuthenticateRequestViaAPIKey)
-	apiKeyGroup.PUT("/assign_user_to_feed", endpoints.AssignUserToFeed)
-	apiKeyGroup.PUT("/unassign_user_from_feed", endpoints.UnassignUserFromFeed)
-	apiKeyGroup.GET("/feed_members", endpoints.GetFeedMembers)
+	// Legacy API Key Auth routes (keep for backwards compatibility)
+	legacyAPIKeyGroup := e.Group("")
+	legacyAPIKeyGroup.Use(auther.AuthenticateRequestViaAPIKey)
+	legacyAPIKeyGroup.PUT("/assign_user_to_feed", endpoints.AssignUserToFeed)
+	legacyAPIKeyGroup.PUT("/unassign_user_from_feed", endpoints.UnassignUserFromFeed)
+	legacyAPIKeyGroup.GET("/feed_members", endpoints.GetFeedMembers)
+
+	// Dashboard routes (embedded SPA)
+	dashboardHandler := feedgenerator.NewDashboardHandler()
+	e.GET("/dashboard", func(c echo.Context) error {
+		return c.Redirect(http.StatusFound, "/dashboard/")
+	})
+	e.GET("/dashboard/*", dashboardHandler.ServeHTTP)
 
 	// Start HTTP server in a goroutine
 	serverErr := make(chan error, 1)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // APIKey represents an API key with its metadata
@@ -15,14 +17,18 @@ type APIKey struct {
 }
 
 // CreateAPIKey creates a new API key
-func (s *Store) CreateAPIKey(ctx context.Context, apiKey, authEntity, assignedUser string) error {
+func (s *Store) CreateAPIKey(ctx context.Context, apiKey, authEntity, assignedUser string) (err error) {
+	_, done := observe(ctx, "exec", &err,
+		attribute.String("assigned.actor", assignedUser))
+	defer done()
+
 	query := `
 		INSERT INTO api_keys (api_key, auth_entity, assigned_user, time_us, deleted)
 		VALUES (?, ?, ?, ?, 0)
 	`
 
 	timeUs := time.Now().UnixMicro()
-	err := s.DB.Exec(ctx, query, apiKey, authEntity, assignedUser, timeUs)
+	err = s.DB.Exec(ctx, query, apiKey, authEntity, assignedUser, timeUs)
 	if err != nil {
 		return fmt.Errorf("failed to create API key: %w", err)
 	}
@@ -31,7 +37,10 @@ func (s *Store) CreateAPIKey(ctx context.Context, apiKey, authEntity, assignedUs
 }
 
 // GetAPIKey retrieves an API key by its value
-func (s *Store) GetAPIKey(ctx context.Context, apiKey string) (*APIKey, error) {
+func (s *Store) GetAPIKey(ctx context.Context, apiKey string) (key *APIKey, err error) {
+	ctx, done := observe(ctx, "query_row", &err)
+	defer done()
+
 	query := `
 		SELECT api_key, auth_entity, assigned_user, created_at
 		FROM api_keys
@@ -40,8 +49,8 @@ func (s *Store) GetAPIKey(ctx context.Context, apiKey string) (*APIKey, error) {
 		LIMIT 1
 	`
 
-	var key APIKey
-	err := s.DB.QueryRow(ctx, query, apiKey).Scan(
+	key = &APIKey{}
+	err = s.DB.QueryRow(ctx, query, apiKey).Scan(
 		&key.APIKey,
 		&key.AuthEntity,
 		&key.AssignedUser,
@@ -51,5 +60,5 @@ func (s *Store) GetAPIKey(ctx context.Context, apiKey string) (*APIKey, error) {
 		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
 
-	return &key, nil
+	return key, nil
 }
