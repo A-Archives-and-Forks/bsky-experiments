@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -213,7 +214,7 @@ func (d *Dispatcher) handleReport(report pdsReport, _ *[]*PDSState) {
 	if report.Success {
 		if pds.Errors > 0 {
 			pds.Errors = 0
-			pds.Limiter.SetLimit(rate.Limit(pdsRate(len(pds.DIDs), d.defaultRPS)))
+			pds.Limiter.SetLimit(rate.Limit(pdsRate(pds.URL, len(pds.DIDs), d.defaultRPS)))
 		}
 		return
 	}
@@ -245,10 +246,13 @@ func (d *Dispatcher) skipBlockedPDS(pds *PDSState) {
 	}
 }
 
-// pdsRate returns the appropriate request rate for a PDS based on how many
-// DIDs it has. Small self-hosted PDSs get a low rate to be polite; large
-// infrastructure PDSs (bsky.network) can handle much more.
-func pdsRate(didCount int, defaultRPS float64) float64 {
+// pdsRate returns the appropriate request rate for a PDS based on its URL
+// and how many DIDs it has. Bluesky infrastructure PDSs get a fixed 10 RPS;
+// small self-hosted PDSs get a low rate to be polite.
+func pdsRate(pdsURL string, didCount int, defaultRPS float64) float64 {
+	if strings.HasSuffix(pdsURL, ".host.bsky.network") {
+		return 10
+	}
 	switch {
 	case didCount < 100:
 		return 2
@@ -344,7 +348,7 @@ func (d *Dispatcher) ingest(groups map[string][]string, active *[]*PDSState) {
 				*active = append(*active, existing)
 			}
 		} else {
-			rps := pdsRate(len(dids), d.defaultRPS)
+			rps := pdsRate(pdsURL, len(dids), d.defaultRPS)
 			burst := max(int(rps), 1)
 			state := &PDSState{
 				URL:     pdsURL,
