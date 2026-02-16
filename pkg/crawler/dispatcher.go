@@ -2,11 +2,14 @@ package crawler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
+	"sort"
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/time/rate"
 )
 
@@ -97,10 +100,20 @@ func (d *Dispatcher) ReportResult(pds string, success bool) {
 func (d *Dispatcher) Run(ctx context.Context, workQueue chan<- *CrawlTask) error {
 	var active []*PDSState
 
+	snapshotTicker := time.NewTicker(30 * time.Second)
+	defer snapshotTicker.Stop()
+
 	for {
 		// Ingest any pending pages and process worker reports (non-blocking).
 		d.drain(&active)
 		d.processReports(&active)
+
+		// Periodic queue snapshot.
+		select {
+		case <-snapshotTicker.C:
+			d.emitQueueSnapshot(ctx, active)
+		default:
+		}
 
 		if len(active) == 0 {
 			// No work — block until we get some, or are told to stop.
@@ -255,6 +268,62 @@ func (d *Dispatcher) drain(active *[]*PDSState) {
 		default:
 			return
 		}
+	}
+}
+
+// pdsQueueEntry is used for sorting PDS entries by remaining DID count.
+type pdsQueueEntry struct {
+	URL       string
+	Remaining int
+	Errors    int
+	Blocked   bool
+	RPS       float64
+}
+
+// emitQueueSnapshot creates a span with the top PDS entries by queue depth.
+func (d *Dispatcher) emitQueueSnapshot(ctx context.Context, active []*PDSState) {
+	_, span := tracer.Start(ctx, "dispatcher.queueSnapshot")
+	defer span.End()
+
+	// Build sorted list of active PDS entries by remaining count.
+	entries := make([]pdsQueueEntry, 0, len(active))
+	for _, pds := range active {
+		remaining := len(pds.DIDs) - pds.Cursor
+		if remaining <= 0 {
+			continue
+		}
+		entries = append(entries, pdsQueueEntry{
+			URL:       pds.URL,
+			Remaining: remaining,
+			Errors:    pds.Errors,
+			Blocked:   pds.Blocked,
+			RPS:       float64(pds.Limiter.Limit()),
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Remaining > entries[j].Remaining
+	})
+
+	span.SetAttributes(
+		attribute.Int64("queue.total_remaining", d.remaining.Load()),
+		attribute.Int("queue.active_pds", len(entries)),
+	)
+
+	// Emit top 50 PDS entries as span attributes.
+	limit := 50
+	if len(entries) < limit {
+		limit = len(entries)
+	}
+	for i, e := range entries[:limit] {
+		prefix := fmt.Sprintf("queue.pds.%d", i)
+		span.SetAttributes(
+			attribute.String(prefix+".url", e.URL),
+			attribute.Int(prefix+".remaining", e.Remaining),
+			attribute.Int(prefix+".errors", e.Errors),
+			attribute.Bool(prefix+".blocked", e.Blocked),
+			attribute.Float64(prefix+".rps", e.RPS),
+		)
 	}
 }
 

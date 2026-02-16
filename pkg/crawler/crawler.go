@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,9 +146,9 @@ func (c *Crawler) Run(ctx context.Context) error {
 		// when a few large ones drain slowly.
 		for c.dispatcher.Remaining() > int64(c.config.PageSize)*10 {
 			// When PDS diversity is low, fetch more pages even if remaining is high.
-			// Cap at 50 pages worth (~2.5M DIDs, ~175MB) to prevent OOM.
+			// Cap at 10M DIDs to prevent OOM.
 			if c.dispatcher.ActivePDSCount() < 50 &&
-				c.dispatcher.Remaining() < int64(c.config.PageSize)*50 {
+				c.dispatcher.Remaining() < 10_000_000 {
 				break
 			}
 			select {
@@ -177,6 +180,13 @@ func (c *Crawler) Run(ctx context.Context) error {
 			c.logger.Warn("failed to filter page, proceeding without filtering", "error", err)
 		} else if filteredCount > 0 {
 			c.logger.Info("filtered completed DIDs from page", "skipped", filteredCount)
+		}
+
+		// Filter out junk PDS entries and DNS-unresolvable hosts.
+		junkFiltered, dnsFiltered := c.filterJunkPDS(pdsGroups)
+		if junkFiltered > 0 || dnsFiltered > 0 {
+			c.logger.Info("filtered junk/unresolvable PDS entries",
+				"junk_pds", junkFiltered, "dns_failed", dnsFiltered)
 		}
 
 		// Count remaining DIDs after filtering.
@@ -309,6 +319,93 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// filterJunkPDS removes PDS entries that are obviously invalid (localhost, example
+// domains, etc.) and performs DNS resolution on the rest, removing entries whose
+// hostnames don't resolve. It modifies pdsGroups in place and returns the number
+// of PDS entries removed by each filter.
+func (c *Crawler) filterJunkPDS(pdsGroups map[string][]string) (junkCount, dnsCount int) {
+	// First pass: remove obviously junk PDS entries.
+	for pdsURL := range pdsGroups {
+		if isJunkPDS(pdsURL) {
+			junkCount++
+			delete(pdsGroups, pdsURL)
+		}
+	}
+
+	// Second pass: DNS pre-check remaining non-Bluesky PDS entries.
+	// Skip DNS checks for known-good infrastructure to avoid unnecessary lookups.
+	resolver := &net.Resolver{PreferGo: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for pdsURL := range pdsGroups {
+		parsed, err := url.Parse(pdsURL)
+		if err != nil {
+			dnsCount++
+			delete(pdsGroups, pdsURL)
+			continue
+		}
+
+		host := parsed.Hostname()
+
+		// Skip DNS check for known-good infrastructure.
+		if strings.HasSuffix(host, ".host.bsky.network") ||
+			strings.HasSuffix(host, ".bsky.network") {
+			continue
+		}
+
+		addrs, err := resolver.LookupHost(ctx, host)
+		if err != nil || len(addrs) == 0 {
+			dnsCount++
+			delete(pdsGroups, pdsURL)
+		}
+	}
+
+	return junkCount, dnsCount
+}
+
+// isJunkPDS returns true for PDS URLs that are obviously invalid and should
+// never be crawled (localhost, example domains, private IPs, etc.).
+func isJunkPDS(pdsURL string) bool {
+	parsed, err := url.Parse(pdsURL)
+	if err != nil {
+		return true
+	}
+
+	host := parsed.Hostname()
+
+	// No hostname at all.
+	if host == "" {
+		return true
+	}
+
+	// ATProto PDS must have a DNS name, not a raw IP address.
+	if net.ParseIP(host) != nil {
+		return true
+	}
+
+	// Localhost.
+	if host == "localhost" || host == "localhost.localdomain" {
+		return true
+	}
+
+	// Known fake/test domains.
+	switch host {
+	case "example.com", "example.test", "example.org", "example.net",
+		"test.com", "uwu":
+		return true
+	}
+
+	// Ngrok and other tunnel services with random subdomains.
+	if strings.HasSuffix(host, ".ngrok-free.app") ||
+		strings.HasSuffix(host, ".ngrok.io") ||
+		strings.HasSuffix(host, ".ngrok.app") {
+		return true
+	}
+
+	return false
 }
 
 // fetchPage queries ClickHouse for one page of DIDs using cursor-based pagination.
