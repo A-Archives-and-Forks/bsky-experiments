@@ -107,3 +107,58 @@ var (
 		Help: "PDSs with remaining undispatched work.",
 	})
 )
+
+// Discovery metrics.
+var (
+	hostsDiscoveredTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "crawler_hosts_discovered_total",
+		Help: "PDS hosts found from relay.",
+	})
+
+	discoveryReposTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "crawler_discovery_repos_total",
+		Help: "Repos discovered from PDSs.",
+	}, []string{"host_type"})
+
+	discoveryPagesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "crawler_discovery_pages_total",
+		Help: "listRepos pages fetched during discovery.",
+	})
+
+	discoveryErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "crawler_discovery_errors_total",
+		Help: "Discovery errors by type.",
+	}, []string{"error_type"})
+)
+
+// Verification metrics.
+var (
+	verificationTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "crawler_verification_total",
+		Help: "PDS verification results.",
+	}, []string{"result"})
+)
+
+// Prepare metrics.
+var (
+	prepareInsertedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "crawler_prepare_inserted_total",
+		Help: "Rows inserted into crawl_repos.",
+	})
+
+	prepareExpectedRepos = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "crawler_prepare_expected_repos",
+		Help: "Expected total repos based on relay host AccountCounts.",
+	})
+
+	prepareHostsRemaining = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "crawler_prepare_hosts_remaining",
+		Help: "PDS hosts remaining to enumerate.",
+	})
+
+	prepareDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "crawler_prepare_duration_seconds",
+		Help:    "Total prepare duration.",
+		Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
+	})
+)

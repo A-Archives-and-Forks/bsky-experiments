@@ -16,27 +16,29 @@ import (
 
 	"github.com/jazware/bsky-experiments/pkg/crawler/carrepo"
 	"github.com/jazware/bsky-experiments/pkg/repoarchive"
+	"github.com/klauspost/compress/zstd"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
 // WorkerPool manages a pool of crawl workers.
 type WorkerPool struct {
-	workQueue  chan *CrawlTask
-	repoQueue  chan *repoarchive.CrawledRepo
-	progress   *Progress
-	dispatcher *Dispatcher
-	config     Config
-	logger     *slog.Logger
-	client     *http.Client
-	wg         sync.WaitGroup
-	cancel     context.CancelFunc
+	workQueue   chan *CrawlTask
+	repoQueue   chan *repoarchive.SerializedRepo
+	progress    *Progress
+	dispatcher  *Dispatcher
+	config      Config
+	logger      *slog.Logger
+	client      *http.Client
+	encoderPool sync.Pool
+	wg          sync.WaitGroup
+	cancel      context.CancelFunc
 }
 
 // NewWorkerPool creates and starts a pool of crawl workers.
 func NewWorkerPool(
 	numWorkers int,
-	repoQueue chan *repoarchive.CrawledRepo,
+	repoQueue chan *repoarchive.SerializedRepo,
 	progress *Progress,
 	dispatcher *Dispatcher,
 	config Config,
@@ -53,6 +55,15 @@ func NewWorkerPool(
 		logger:     logger,
 		client: &http.Client{
 			Timeout: 20 * time.Minute,
+		},
+		encoderPool: sync.Pool{
+			New: func() any {
+				enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevel(config.ZstdLevel)))
+				if err != nil {
+					panic("creating zstd encoder: " + err.Error())
+				}
+				return enc
+			},
 		},
 		cancel: cancel,
 	}
@@ -118,11 +129,22 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 
 	repoRecords.Observe(float64(recordCount))
 	repoCollections.Observe(float64(collectionCount))
+
+	// Serialize + compress in this worker goroutine (parallelized across all workers).
+	enc := wp.encoderPool.Get().(*zstd.Encoder)
+	sr, err := repoarchive.SerializeRepoBlock(enc, crawled)
+	wp.encoderPool.Put(enc)
+	if err != nil {
+		logger.Error("failed to serialize repo", "did", task.DID, "error", err)
+		reposProcessedTotal.WithLabelValues("serialize_error").Inc()
+		return
+	}
+
 	reposProcessedTotal.WithLabelValues("success").Inc()
 
-	// Send to writer.
+	// Send pre-compressed block to writer.
 	select {
-	case wp.repoQueue <- crawled:
+	case wp.repoQueue <- sr:
 		wp.progress.MarkCompleted(ctx, task.DID)
 	case <-ctx.Done():
 		return

@@ -71,6 +71,15 @@ type Record struct {
 	JSON []byte // CID-stripped JSON
 }
 
+// SerializedRepo is a pre-compressed repo block ready for sequential file writing.
+// Workers produce these by calling SerializeRepoBlock, and the writer consumes them
+// via WriteSerializedRepo — keeping compression parallel and I/O sequential.
+type SerializedRepo struct {
+	DID       string
+	BlockData []byte
+	BlockCRC  uint32
+}
+
 // CrawledRepo is the in-memory representation of a crawled repo ready for writing.
 type CrawledRepo struct {
 	DID         string

@@ -44,7 +44,7 @@ type Crawler struct {
 	writer     *repoarchive.SegmentWriter
 	logger     *slog.Logger
 
-	repoQueue chan *repoarchive.CrawledRepo
+	repoQueue chan *repoarchive.SerializedRepo
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 }
@@ -78,7 +78,7 @@ func NewCrawler(config Config) (*Crawler, error) {
 	return &Crawler{
 		config:    config,
 		progress:  progress,
-		repoQueue: make(chan *repoarchive.CrawledRepo, 100),
+		repoQueue: make(chan *repoarchive.SerializedRepo, 100),
 		logger:    config.Logger,
 	}, nil
 }
@@ -88,9 +88,6 @@ func (c *Crawler) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	defer cancel()
-
-	ctx, runSpan := tracer.Start(ctx, "crawler.run")
-	defer runSpan.End()
 
 	// Get current segment number for resume.
 	segNum, err := c.progress.GetSegmentNum(ctx)
@@ -247,12 +244,6 @@ func (c *Crawler) Run(ctx context.Context) error {
 	c.progress.SaveStats(ctx, c.writer.TotalRepos(), c.writer.BytesWritten())
 	c.progress.ClearCursor(ctx)
 
-	runSpan.SetAttributes(
-		attribute.Int64("crawl.bytes_written", c.writer.BytesWritten()),
-		attribute.Int("crawl.segments", c.writer.SegmentNum()),
-		attribute.Int("crawl.pages", totalPages),
-	)
-
 	c.logger.Info("crawl complete",
 		"total_repos", c.writer.TotalRepos(),
 		"bytes_written", c.writer.BytesWritten(),
@@ -270,7 +261,8 @@ func (c *Crawler) Shutdown() {
 	c.wg.Wait()
 }
 
-// writerLoop receives crawled repos and writes them to segments.
+// writerLoop receives pre-serialized repos and writes them to segments.
+// Compression is already done by workers; this loop only does sequential I/O.
 func (c *Crawler) writerLoop(ctx context.Context) {
 	defer c.wg.Done()
 
@@ -278,26 +270,21 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	lastSegment := c.writer.SegmentNum()
-	lastBytes := c.writer.BytesWritten()
 
 	for {
 		select {
-		case repo, ok := <-c.repoQueue:
+		case sr, ok := <-c.repoQueue:
 			if !ok {
 				return
 			}
 
-			if err := c.writer.WriteRepo(repo); err != nil {
-				c.logger.Error("failed to write repo", "did", repo.DID, "error", err)
+			if err := c.writer.WriteSerializedRepo(sr); err != nil {
+				c.logger.Error("failed to write repo", "did", sr.DID, "error", err)
 				continue
 			}
 
-			// Track compressed bytes per repo via delta.
-			currentBytes := c.writer.BytesWritten()
-			repoBytes := currentBytes - lastBytes
-			lastBytes = currentBytes
-			bytesWrittenTotal.Add(float64(repoBytes))
-			repoCompressedBytes.Observe(float64(repoBytes))
+			bytesWrittenTotal.Add(float64(len(sr.BlockData)))
+			repoCompressedBytes.Observe(float64(len(sr.BlockData)))
 
 			// Detect segment finalization.
 			currentSegment := c.writer.SegmentNum()
@@ -311,9 +298,9 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 			c.progress.SaveStats(ctx, c.writer.TotalRepos(), c.writer.BytesWritten())
 		case <-ctx.Done():
 			// Drain remaining repos in the channel.
-			for repo := range c.repoQueue {
-				if err := c.writer.WriteRepo(repo); err != nil {
-					c.logger.Error("failed to write repo during drain", "did", repo.DID, "error", err)
+			for sr := range c.repoQueue {
+				if err := c.writer.WriteSerializedRepo(sr); err != nil {
+					c.logger.Error("failed to write repo during drain", "did", sr.DID, "error", err)
 				}
 			}
 			return
@@ -419,7 +406,7 @@ func (c *Crawler) fetchPage(ctx context.Context, cursor string) (map[string][]st
 		attribute.Int("page.size", c.config.PageSize),
 	)
 
-	query := "SELECT did, pds FROM plc_did_state FINAL WHERE pds != '' AND did > ?"
+	query := "SELECT did, pds FROM crawl_repos FINAL WHERE pds != '' AND did > ?"
 	args := []any{cursor}
 	if len(c.config.SkipPDS) > 0 {
 		query += " AND pds NOT IN (?)"
@@ -430,7 +417,7 @@ func (c *Crawler) fetchPage(ctx context.Context, cursor string) (map[string][]st
 
 	rows, err := c.config.ClickHouseConn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, "", 0, fmt.Errorf("querying plc_did_state: %w", err)
+		return nil, "", 0, fmt.Errorf("querying crawl_repos: %w", err)
 	}
 	defer rows.Close()
 

@@ -63,6 +63,28 @@ crawler-down:
     @echo "Stopping crawler service with Docker Compose..."
     docker compose -f build/crawler/docker-compose.yml down
 
+crawler-prepare:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Decrypting crawler.enc.env..."
+    sops decrypt env/crawler.enc.env > env/crawler.env
+    set -a; source env/crawler.env; set +a
+    echo "Building crawl list from relay..."
+    go run ./cmd/crawler prepare
+
+crawler-replay input_dir="/secundus/Documents/atproto/crawler/data" workers="6" *collections="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Decrypting crawler.enc.env..."
+    sops decrypt env/crawler.enc.env > env/crawler.env
+    set -a; source env/crawler.env; set +a
+    args="--input-dir {{input_dir}} --workers {{workers}} --truncate"
+    if [[ -n "{{collections}}" ]]; then
+        args="$args --collections {{collections}}"
+    fi
+    echo "Replaying segments from {{input_dir}} with {{workers}} workers..."
+    go run ./cmd/crawler replay $args
+
 crawler-reset:
     #!/usr/bin/env bash
     set -euo pipefail
