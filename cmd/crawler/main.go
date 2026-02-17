@@ -386,10 +386,10 @@ func setupReplayClickHouse(cctx *cli.Context) (driver.Conn, error) {
 	opts := &clickhouse.Options{
 		Addr: []string{cctx.String("clickhouse-address")},
 		Settings: clickhouse.Settings{
-			"insert_deduplicate":  0, // skip block-level dedup, ReplacingMergeTree handles it
-			"optimize_on_insert":  0, // don't merge inline, let background merges handle it
-			"max_insert_threads":  4, // parallel block processing server-side
-			"insert_quorum":       0, // no quorum waiting (single-node)
+			"insert_deduplicate": 0, // skip block-level dedup, ReplacingMergeTree handles it
+			"optimize_on_insert": 0, // don't merge inline, let background merges handle it
+			"max_insert_threads": 4, // parallel block processing server-side
+			"insert_quorum":      0, // no quorum waiting (single-node)
 		},
 	}
 	if username := cctx.String("clickhouse-username"); username != "" {
@@ -507,7 +507,7 @@ func runReplay(cctx *cli.Context) error {
 	var totalRecords atomic.Int64
 	var wg sync.WaitGroup
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

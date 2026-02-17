@@ -135,7 +135,7 @@ func (auth *Auth) GetClaimsFromAuthHeader(ctx context.Context, authHeader string
 		ValidMethods: []string{es256k.SigningMethodES256K.Alg()},
 	}
 
-	token, err := parser.ParseWithClaims(accessToken, claims, func(token *jwt.Token) (interface{}, error) {
+	token, err := parser.ParseWithClaims(accessToken, claims, func(token *jwt.Token) (any, error) {
 		if claims, ok := token.Claims.(*jwt.StandardClaims); ok {
 			// Get the user's key from PLC Directory
 			userDID := claims.Issuer

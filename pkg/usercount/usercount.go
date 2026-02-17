@@ -266,7 +266,7 @@ func (uc *UserCount) GetUserCount(ctx context.Context) (int, error) {
 	uc.CurrentUserCount = totalUserCount
 
 	// Store the PDS list in redis
-	pdsList := map[string]interface{}{}
+	pdsList := map[string]any{}
 	for _, pds := range uc.PDSs {
 		pdsList[pds.Host] = fmt.Sprintf("%d|%d|%s", pds.UserCount, pds.LastPageSize, pds.LastCursor)
 	}

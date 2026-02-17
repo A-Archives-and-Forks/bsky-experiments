@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -336,10 +337,8 @@ func (ep *Endpoints) ProcessUser(feedName string, userDID string) {
 		}
 	} else {
 		// Check if the user is already in the list
-		for _, existingUserDID := range ep.FeedUsers[feedName] {
-			if existingUserDID == userDID {
-				return
-			}
+		if slices.Contains(ep.FeedUsers[feedName], userDID) {
+			return
 		}
 
 		ep.FeedUsers[feedName] = append(ep.FeedUsers[feedName], userDID)
@@ -514,7 +513,7 @@ func (ep *Endpoints) GetFeedMembers(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error getting authors: %s", err.Error())})
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{"authors": authors})
+	return c.JSON(http.StatusOK, map[string]any{"authors": authors})
 }
 
 func (ep *Endpoints) GetFeedMembersPaginated(c echo.Context) error {

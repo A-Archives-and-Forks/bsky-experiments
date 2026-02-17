@@ -18,7 +18,7 @@ func StripCIDs(data []byte) ([]byte, error) {
 		return data, nil
 	}
 
-	var parsed interface{}
+	var parsed any
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, err
 	}
@@ -28,10 +28,10 @@ func StripCIDs(data []byte) ([]byte, error) {
 }
 
 // stripCIDsRecursive walks the JSON structure and removes CID fields.
-func stripCIDsRecursive(v interface{}) interface{} {
+func stripCIDsRecursive(v any) any {
 	switch val := v.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{}, len(val))
+	case map[string]any:
+		result := make(map[string]any, len(val))
 		for key, value := range val {
 			if cidFieldNames[key] {
 				continue
@@ -40,8 +40,8 @@ func stripCIDsRecursive(v interface{}) interface{} {
 		}
 		return result
 
-	case []interface{}:
-		result := make([]interface{}, len(val))
+	case []any:
+		result := make([]any, len(val))
 		for i, item := range val {
 			result[i] = stripCIDsRecursive(item)
 		}

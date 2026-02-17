@@ -308,5 +308,5 @@ func (api *API) GetListMembers(c echo.Context) error {
 		return nil
 	})
 
-	return c.JSON(http.StatusOK, map[string]interface{}{"members": listMembers, "list": listObj})
+	return c.JSON(http.StatusOK, map[string]any{"members": listMembers, "list": listObj})
 }

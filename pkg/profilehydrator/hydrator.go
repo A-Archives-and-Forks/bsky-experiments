@@ -243,10 +243,7 @@ func (h *Hydrator) processBatch(ctx context.Context) (int, error) {
 	// Fetch profiles in batches of BatchSize
 	totalFetched := 0
 	for i := 0; i < len(dids); i += h.config.BatchSize {
-		end := i + h.config.BatchSize
-		if end > len(dids) {
-			end = len(dids)
-		}
+		end := min(i+h.config.BatchSize, len(dids))
 		batch := dids[i:end]
 
 		// Rate limit

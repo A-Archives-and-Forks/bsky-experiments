@@ -219,8 +219,8 @@ func (f *Feed) GetPage(ctx context.Context, feed string, userDID string, limit i
 	}
 
 	key := hotCacheKey
-	if strings.HasPrefix(feed, "top-") {
-		hours, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(feed, "top-"), "h"))
+	if after, ok := strings.CutPrefix(feed, "top-"); ok {
+		hours, err := strconv.Atoi(strings.TrimSuffix(after, "h"))
 		if err != nil {
 			return nil, nil, fmt.Errorf("error parsing hours from feed: %w", err)
 		}

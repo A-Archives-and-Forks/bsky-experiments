@@ -98,7 +98,7 @@ func RunPrepare(ctx context.Context, config PrepareConfig) error {
 	// Launch parallel consumers that each read batches from repoCh,
 	// verify in-memory, accumulate locally, and flush large batches.
 	var consumerWg sync.WaitGroup
-	for i := 0; i < prepareConsumers; i++ {
+	for range prepareConsumers {
 		consumerWg.Add(1)
 		go func() {
 			defer consumerWg.Done()

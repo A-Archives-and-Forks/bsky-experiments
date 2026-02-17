@@ -21,12 +21,12 @@ func TestStripCIDs_Like(t *testing.T) {
 		t.Fatalf("StripCIDs failed: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		t.Fatalf("Failed to parse result: %v", err)
 	}
 
-	subject := parsed["subject"].(map[string]interface{})
+	subject := parsed["subject"].(map[string]any)
 	if _, exists := subject["cid"]; exists {
 		t.Error("subject.cid should be removed")
 	}
@@ -53,12 +53,12 @@ func TestStripCIDs_Repost(t *testing.T) {
 		t.Fatalf("StripCIDs failed: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		t.Fatalf("Failed to parse result: %v", err)
 	}
 
-	subject := parsed["subject"].(map[string]interface{})
+	subject := parsed["subject"].(map[string]any)
 	if _, exists := subject["cid"]; exists {
 		t.Error("subject.cid should be removed")
 	}
@@ -89,14 +89,14 @@ func TestStripCIDs_PostWithReply(t *testing.T) {
 		t.Fatalf("StripCIDs failed: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		t.Fatalf("Failed to parse result: %v", err)
 	}
 
-	reply := parsed["reply"].(map[string]interface{})
-	parent := reply["parent"].(map[string]interface{})
-	root := reply["root"].(map[string]interface{})
+	reply := parsed["reply"].(map[string]any)
+	parent := reply["parent"].(map[string]any)
+	root := reply["root"].(map[string]any)
 
 	if _, exists := parent["cid"]; exists {
 		t.Error("reply.parent.cid should be removed")
@@ -143,13 +143,13 @@ func TestStripCIDs_ProfileWithBlobRefs(t *testing.T) {
 		t.Fatalf("StripCIDs failed: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		t.Fatalf("Failed to parse result: %v", err)
 	}
 
-	avatar := parsed["avatar"].(map[string]interface{})
-	avatarRef := avatar["ref"].(map[string]interface{})
+	avatar := parsed["avatar"].(map[string]any)
+	avatarRef := avatar["ref"].(map[string]any)
 	if _, exists := avatarRef["$link"]; !exists {
 		t.Error("avatar.ref.$link should be preserved (blob CIDs are kept)")
 	}
@@ -157,8 +157,8 @@ func TestStripCIDs_ProfileWithBlobRefs(t *testing.T) {
 		t.Error("avatar.mimeType should be preserved")
 	}
 
-	banner := parsed["banner"].(map[string]interface{})
-	bannerRef := banner["ref"].(map[string]interface{})
+	banner := parsed["banner"].(map[string]any)
+	bannerRef := banner["ref"].(map[string]any)
 	if _, exists := bannerRef["$link"]; !exists {
 		t.Error("banner.ref.$link should be preserved (blob CIDs are kept)")
 	}
@@ -207,18 +207,18 @@ func TestStripCIDs_PostWithEmbeddedImages(t *testing.T) {
 		t.Fatalf("StripCIDs failed: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		t.Fatalf("Failed to parse result: %v", err)
 	}
 
-	embed := parsed["embed"].(map[string]interface{})
-	images := embed["images"].([]interface{})
+	embed := parsed["embed"].(map[string]any)
+	images := embed["images"].([]any)
 
 	for i, img := range images {
-		image := img.(map[string]interface{})
-		imageBlob := image["image"].(map[string]interface{})
-		ref := imageBlob["ref"].(map[string]interface{})
+		image := img.(map[string]any)
+		imageBlob := image["image"].(map[string]any)
+		ref := imageBlob["ref"].(map[string]any)
 		if _, exists := ref["$link"]; !exists {
 			t.Errorf("embed.images[%d].image.ref.$link should be preserved (blob CIDs are kept)", i)
 		}
@@ -253,7 +253,7 @@ func TestStripCIDs_NoCIDs(t *testing.T) {
 		t.Fatalf("StripCIDs failed: %v", err)
 	}
 
-	var inputParsed, resultParsed interface{}
+	var inputParsed, resultParsed any
 	if err := json.Unmarshal([]byte(input), &inputParsed); err != nil {
 		t.Fatalf("Failed to parse input: %v", err)
 	}
@@ -295,13 +295,13 @@ func TestStripCIDs_QuotedRecord(t *testing.T) {
 		t.Fatalf("StripCIDs failed: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		t.Fatalf("Failed to parse result: %v", err)
 	}
 
-	embed := parsed["embed"].(map[string]interface{})
-	record := embed["record"].(map[string]interface{})
+	embed := parsed["embed"].(map[string]any)
+	record := embed["record"].(map[string]any)
 
 	if _, exists := record["cid"]; exists {
 		t.Error("embed.record.cid should be removed")

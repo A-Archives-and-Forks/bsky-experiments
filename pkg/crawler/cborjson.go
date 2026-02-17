@@ -12,7 +12,7 @@ import (
 // objects to {"$link": "..."} and stripping redundant "cid" fields (StrongRef)
 // in a single pass.
 func cborToStrippedJSON(raw []byte) ([]byte, error) {
-	var obj interface{}
+	var obj any
 	if err := cbornode.DecodeInto(raw, &obj); err != nil {
 		return nil, fmt.Errorf("cbor decode: %w", err)
 	}
@@ -23,9 +23,9 @@ func cborToStrippedJSON(raw []byte) ([]byte, error) {
 // convertAndStripCIDs walks an interface{} tree from CBOR decode:
 //   - Converts cid.Cid values to map{"$link": cid.String()}
 //   - Removes "cid" keys from maps (StrongRef deduplication)
-func convertAndStripCIDs(v interface{}) interface{} {
+func convertAndStripCIDs(v any) any {
 	switch val := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for k, v := range val {
 			if k == "cid" {
 				delete(val, k)
@@ -34,9 +34,9 @@ func convertAndStripCIDs(v interface{}) interface{} {
 			val[k] = convertAndStripCIDs(v)
 		}
 		return val
-	case map[interface{}]interface{}:
+	case map[any]any:
 		// CBOR may decode map keys as interface{}.
-		result := make(map[string]interface{}, len(val))
+		result := make(map[string]any, len(val))
 		for k, v := range val {
 			key := fmt.Sprint(k)
 			if key == "cid" {
@@ -45,13 +45,13 @@ func convertAndStripCIDs(v interface{}) interface{} {
 			result[key] = convertAndStripCIDs(v)
 		}
 		return result
-	case []interface{}:
+	case []any:
 		for i, v := range val {
 			val[i] = convertAndStripCIDs(v)
 		}
 		return val
 	case cid.Cid:
-		return map[string]interface{}{"$link": val.String()}
+		return map[string]any{"$link": val.String()}
 	default:
 		return v
 	}

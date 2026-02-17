@@ -279,7 +279,7 @@ func TestSegmentRotation(t *testing.T) {
 	}
 
 	// Write repos until we get multiple segments.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if err := writer.WriteRepo(&CrawledRepo{
 			DID:       "did:plc:" + string(rune('a'+i)),
 			PDS:       "https://pds.example.com",

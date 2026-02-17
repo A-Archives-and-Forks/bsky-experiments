@@ -69,7 +69,7 @@ func NewWorkerPool(
 	}
 
 	wp.wg.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
+	for i := range numWorkers {
 		go wp.worker(ctx, i)
 	}
 

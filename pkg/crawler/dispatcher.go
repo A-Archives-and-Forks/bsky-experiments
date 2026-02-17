@@ -315,10 +315,7 @@ func (d *Dispatcher) emitQueueSnapshot(ctx context.Context, active []*PDSState) 
 	)
 
 	// Emit top 50 PDS entries as span attributes.
-	limit := 50
-	if len(entries) < limit {
-		limit = len(entries)
-	}
+	limit := min(len(entries), 50)
 	for i, e := range entries[:limit] {
 		prefix := fmt.Sprintf("queue.pds.%d", i)
 		span.SetAttributes(
