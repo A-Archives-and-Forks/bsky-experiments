@@ -85,6 +85,16 @@ crawler-replay input_dir="/secundus/Documents/atproto/crawler/data" workers="6" 
     echo "Replaying segments from {{input_dir}} with {{workers}} workers..."
     go run ./cmd/crawler replay $args
 
+crawler-tally input_dir="/secundus/Documents/atproto/crawler/data" *collections="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Decrypting crawler.enc.env..."
+    sops decrypt env/crawler.enc.env > env/crawler.env
+    set -a; source env/crawler.env; set +a
+    args="--input-dir {{input_dir}} --by-collection"
+    echo "Tallying records across segments in {{input_dir}}..."
+    go run ./cmd/crawler tally $args
+
 crawler-reset:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -92,7 +102,7 @@ crawler-reset:
     sops decrypt env/crawler.enc.env > env/crawler.env
     set -a; source env/crawler.env; set +a
     echo "Clearing crawl data and Redis state..."
-    go run ./cmd/crawler reset --output-dir /secundus/Documents/atproto/crawler/data
+    go run ./cmd/crawler reset # --output-dir /secundus/Documents/atproto/crawler/data
 
 # Bring up Redis and other common services
 common:

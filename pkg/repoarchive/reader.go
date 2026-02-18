@@ -240,6 +240,12 @@ func (ri *repoIterator) Collection() *collectionIterator {
 	return ri.currentColl
 }
 
+// TOC returns the collection table-of-contents entries for this repo,
+// including record counts, without requiring decompression.
+func (ri *repoIterator) TOC() []CollectionTOCEntry {
+	return ri.toc
+}
+
 // NextRecord advances to the next record in the current collection.
 func (ci *collectionIterator) NextRecord() bool {
 	if ci.recordsRead >= ci.RecordCount {
