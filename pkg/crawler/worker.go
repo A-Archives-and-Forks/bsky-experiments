@@ -110,7 +110,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 
 	start := time.Now()
 
-	crawled, recordCount, collectionCount, err := wp.fetchAndParseRepo(ctx, task)
+	crawled, recordCount, collectionCount, err := wp.fetchAndParseRepo(ctx, logger, task)
 	duration := time.Since(start).Seconds()
 	repoDurationSeconds.Observe(duration)
 
@@ -151,7 +151,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 	}
 }
 
-func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, task *CrawlTask) (*repoarchive.CrawledRepo, int, int, error) {
+func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, logger *slog.Logger, task *CrawlTask) (*repoarchive.CrawledRepo, int, int, error) {
 	url := fmt.Sprintf("%s/xrpc/com.atproto.sync.getRepo?did=%s", task.PDS, task.DID)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -226,6 +226,7 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, task *CrawlTask) (*
 	err = r.ForEach(func(path string, raw []byte) error {
 		parts := strings.SplitN(path, "/", 2)
 		if len(parts) != 2 {
+			recordsDroppedTotal.WithLabelValues("invalid_path").Inc()
 			return nil
 		}
 		collection := parts[0]
@@ -233,6 +234,9 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, task *CrawlTask) (*
 
 		jsonBytes, err := cborToStrippedJSON(raw)
 		if err != nil {
+			recordsDroppedTotal.WithLabelValues("cbor_decode").Inc()
+			logger.Warn("cbor decode failed, skipping record",
+				"did", task.DID, "collection", collection, "rkey", rkey, "error", err)
 			return nil
 		}
 

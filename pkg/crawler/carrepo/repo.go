@@ -6,7 +6,14 @@ import (
 
 	"github.com/ipfs/go-cid"
 	cbornode "github.com/ipfs/go-ipld-cbor"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+var missingBlocksTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "crawler_repo_missing_blocks_total",
+	Help: "Records skipped due to missing CID blocks in CAR data.",
+})
 
 // Repo holds a parsed ATProto repository from a CAR file.
 type Repo struct {
@@ -51,12 +58,13 @@ func ParseRepo(r io.Reader) (*Repo, error) {
 
 // ForEach iterates all records in the repo, calling cb with the record path
 // (e.g. "app.bsky.feed.post/3abc") and the raw CBOR bytes of the record.
-// Records with missing blocks are silently skipped.
+// Records with missing blocks are counted via metrics and skipped.
 func (r *Repo) ForEach(cb func(path string, raw []byte) error) error {
 	return walkLeaves(r.blocks, r.root, func(key string, val cid.Cid) error {
 		raw, ok := r.blocks[val]
 		if !ok {
-			return nil // Skip records with missing blocks.
+			missingBlocksTotal.Inc()
+			return nil
 		}
 		return cb(key, raw)
 	})

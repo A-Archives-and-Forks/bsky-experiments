@@ -95,6 +95,15 @@ crawler-tally input_dir="/secundus/Documents/atproto/crawler/data" *collections=
     echo "Tallying records across segments in {{input_dir}}..."
     go run ./cmd/crawler tally $args
 
+crawler-create-mv:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Decrypting crawler.enc.env..."
+    sops decrypt env/crawler.enc.env > env/crawler.env
+    set -a; source env/crawler.env; set +a
+    echo "Creating materialized views and backfilling..."
+    go run ./cmd/crawler create-mv
+
 crawler-reset:
     #!/usr/bin/env bash
     set -euo pipefail

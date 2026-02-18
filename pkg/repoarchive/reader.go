@@ -8,7 +8,14 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+var decompressFailTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "crawler_collection_decompress_fail_total",
+	Help: "Collections skipped due to zstd decompression failure.",
+})
 
 // SegmentReader reads .rca segment files sequentially with optional collection filtering.
 type SegmentReader struct {
@@ -221,6 +228,7 @@ func (ri *repoIterator) NextCollection() bool {
 
 		decompressed, err := ri.reader.decoder.DecodeAll(compressed, nil)
 		if err != nil {
+			decompressFailTotal.Inc()
 			return false
 		}
 

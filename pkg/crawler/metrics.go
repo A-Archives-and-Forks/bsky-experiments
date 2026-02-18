@@ -51,6 +51,14 @@ var (
 	})
 )
 
+// Record-level drop metrics.
+var (
+	recordsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "crawler_records_dropped_total",
+		Help: "Records silently dropped during crawling.",
+	}, []string{"reason"})
+)
+
 // Writer metrics.
 var (
 	segmentsFinalizedTotal = promauto.NewCounter(prometheus.CounterOpts{
