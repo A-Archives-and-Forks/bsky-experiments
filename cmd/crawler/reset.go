@@ -1,28 +1,18 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 
-	"github.com/jazware/bsky-experiments/pkg/crawler"
-	"github.com/redis/go-redis/v9"
 	"github.com/urfave/cli/v2"
 )
 
 func resetCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "reset",
-		Usage: "Clear output data, Redis cursors, and all crawl progress",
+		Usage: "Clear output .rca segment files",
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "redis-address",
-				Usage:   "Redis address",
-				Value:   "localhost:6379",
-				EnvVars: []string{"REDIS_ADDRESS"},
-			},
 			&cli.StringFlag{
 				Name:    "output-dir",
 				Usage:   "Directory containing .rca segment files",
@@ -36,29 +26,9 @@ func resetCommand() *cli.Command {
 }
 
 func runReset(cctx *cli.Context) error {
-	ctx := context.Background()
-
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: cctx.String("redis-address"),
-	})
-	if _, err := redisClient.Ping(ctx).Result(); err != nil {
-		return fmt.Errorf("redis ping: %w", err)
-	}
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	progress := crawler.NewProgress(redisClient, logger)
-
-	// Clear Redis keys.
-	deleted, err := progress.ClearAll(ctx)
-	if err != nil {
-		return fmt.Errorf("clearing Redis keys: %w", err)
-	}
-	fmt.Printf("Cleared %d Redis keys\n", deleted)
-
-	// Remove .rca files from output directory.
 	outputDir := cctx.String("output-dir")
 	if outputDir == "" {
-		fmt.Println("No output directory specified, skipping .rca file removal")
+		fmt.Println("No output directory specified, nothing to do")
 		return nil
 	}
 

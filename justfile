@@ -111,7 +111,7 @@ crawler-reset:
     sops decrypt env/crawler.enc.env > env/crawler.env
     set -a; source env/crawler.env; set +a
     echo "Clearing crawl data and Redis state..."
-    go run ./cmd/crawler reset # --output-dir /secundus/Documents/atproto/crawler/data
+    go run ./cmd/crawler reset --output-dir /secundus/Documents/atproto/crawler/data
 
 # Bring up Redis and other common services
 common:

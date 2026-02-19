@@ -61,6 +61,11 @@ func crawlCommand() *cli.Command {
 			Name:  "resume",
 			Usage: "Resume an interrupted crawl",
 		},
+		&cli.BoolFlag{
+			Name:    "direct",
+			Usage:   "Write directly to ClickHouse instead of .rca archive files",
+			EnvVars: []string{"DIRECT"},
+		},
 	)
 
 	return &cli.Command{
@@ -91,22 +96,19 @@ func runCrawl(cctx *cli.Context) error {
 		defer shutdown(ctx)
 	}
 
-	redisClient, err := setupRedis(ctx, cctx)
-	if err != nil {
-		return fmt.Errorf("redis setup: %w", err)
-	}
-
 	chConn, err := setupClickHouse(cctx)
 	if err != nil {
 		return fmt.Errorf("clickhouse setup: %w", err)
 	}
+
+	direct := cctx.Bool("direct")
 
 	segmentSize, err := parseSize(cctx.String("segment-size"))
 	if err != nil {
 		return fmt.Errorf("invalid segment-size: %w", err)
 	}
 
-	c, err := crawler.NewCrawler(crawler.Config{
+	cfg := crawler.Config{
 		OutputDir:      cctx.String("output-dir"),
 		Workers:        cctx.Int("workers"),
 		DefaultPDSRPS:  cctx.Float64("default-pds-rps"),
@@ -115,9 +117,35 @@ func runCrawl(cctx *cli.Context) error {
 		PageSize:       cctx.Int("page-size"),
 		SkipPDS:        cctx.StringSlice("skip-pds"),
 		ClickHouseConn: chConn,
-		RedisClient:    redisClient,
 		Logger:         logger,
-	})
+		Direct:         direct,
+	}
+
+	// In direct mode, set up a separate bulk-optimized ClickHouse connection for writes.
+	if direct {
+		bulkConn, err := crawler.SetupBulkClickHouse(
+			cctx.String("clickhouse-address"),
+			cctx.String("clickhouse-username"),
+			cctx.String("clickhouse-password"),
+		)
+		if err != nil {
+			return fmt.Errorf("bulk clickhouse setup: %w", err)
+		}
+		cfg.DirectCHConn = bulkConn
+
+		if err := crawler.PrepareTableForBulkLoad(ctx, bulkConn, true, logger); err != nil {
+			return fmt.Errorf("preparing table for bulk load: %w", err)
+		}
+		defer func() {
+			logger.Info("finalizing table after bulk load...")
+			bgCtx := context.Background()
+			if err := crawler.FinalizeTableAfterBulkLoad(bgCtx, bulkConn, logger); err != nil {
+				logger.Error("failed to finalize table", "error", err)
+			}
+		}()
+	}
+
+	c, err := crawler.NewCrawler(cfg)
 	if err != nil {
 		return fmt.Errorf("creating crawler: %w", err)
 	}

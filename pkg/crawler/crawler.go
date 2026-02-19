@@ -12,7 +12,6 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jazware/bsky-experiments/pkg/repoarchive"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -31,8 +30,11 @@ type Config struct {
 	PageSize      int
 	SkipPDS       []string
 
+	// Direct mode: write directly to ClickHouse instead of .rca archives.
+	Direct      bool
+	DirectCHConn driver.Conn // Bulk-optimized connection for direct inserts.
+
 	ClickHouseConn driver.Conn
-	RedisClient    *redis.Client
 	Logger         *slog.Logger
 }
 
@@ -42,11 +44,13 @@ type Crawler struct {
 	progress   *Progress
 	dispatcher *Dispatcher
 	writer     *repoarchive.SegmentWriter
+	chWriter   *CHWriter
 	logger     *slog.Logger
 
-	repoQueue chan *repoarchive.SerializedRepo
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	repoQueue    chan *repoarchive.SerializedRepo
+	crawledQueue chan *repoarchive.CrawledRepo
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 // NewCrawler creates a new Crawler. Call Run() to start.
@@ -73,14 +77,21 @@ func NewCrawler(config Config) (*Crawler, error) {
 		config.PageSize = 50000
 	}
 
-	progress := NewProgress(config.RedisClient, config.Logger)
+	progress := NewProgress(config.Logger)
 
-	return &Crawler{
-		config:    config,
-		progress:  progress,
-		repoQueue: make(chan *repoarchive.SerializedRepo, 100),
-		logger:    config.Logger,
-	}, nil
+	c := &Crawler{
+		config:   config,
+		progress: progress,
+		logger:   config.Logger,
+	}
+
+	if config.Direct {
+		c.crawledQueue = make(chan *repoarchive.CrawledRepo, 100)
+	} else {
+		c.repoQueue = make(chan *repoarchive.SerializedRepo, 100)
+	}
+
+	return c, nil
 }
 
 // Run starts the crawl. It blocks until the crawl is complete or the context is cancelled.
@@ -89,41 +100,42 @@ func (c *Crawler) Run(ctx context.Context) error {
 	c.cancel = cancel
 	defer cancel()
 
-	// Get current segment number for resume.
-	segNum, err := c.progress.GetSegmentNum(ctx)
-	if err != nil {
-		segNum = 1
-	}
+	if c.config.Direct {
+		// Direct mode: start CHWriter instead of SegmentWriter.
+		c.chWriter = NewCHWriter(c.config.DirectCHConn, c.crawledQueue, c.logger)
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.chWriter.Run(ctx)
+		}()
+	} else {
+		// Archive mode: open segment writer.
+		segNum := c.progress.GetSegmentNum()
+		writer, err := repoarchive.NewSegmentWriter(
+			c.config.OutputDir,
+			repoarchive.WithSegmentSize(c.config.SegmentSize),
+			repoarchive.WithZstdLevel(c.config.ZstdLevel),
+			repoarchive.WithStartSegment(segNum),
+		)
+		if err != nil {
+			return fmt.Errorf("creating segment writer: %w", err)
+		}
+		c.writer = writer
 
-	// Open segment writer.
-	writer, err := repoarchive.NewSegmentWriter(
-		c.config.OutputDir,
-		repoarchive.WithSegmentSize(c.config.SegmentSize),
-		repoarchive.WithZstdLevel(c.config.ZstdLevel),
-		repoarchive.WithStartSegment(segNum),
-	)
-	if err != nil {
-		return fmt.Errorf("creating segment writer: %w", err)
+		c.wg.Add(1)
+		go c.writerLoop(ctx)
 	}
-	c.writer = writer
-
-	// Start segment writer goroutine.
-	c.wg.Add(1)
-	go c.writerLoop(ctx)
 
 	// Start dispatcher and workers.
 	c.dispatcher = NewDispatcher(c.config.DefaultPDSRPS, c.logger)
-	workerPool := NewWorkerPool(c.config.Workers, c.repoQueue, c.progress, c.dispatcher, c.config, c.logger)
+	workerPool := NewWorkerPool(c.config.Workers, c.repoQueue, c.crawledQueue, c.progress, c.dispatcher, c.config, c.logger)
 	dispatchErr := make(chan error, 1)
 	go func() {
 		dispatchErr <- c.dispatcher.Run(ctx, workerPool.WorkQueue())
 	}()
 
-	// Load cursor from Redis for resume.
-	cursor, err := c.progress.GetCursor(ctx)
-	if err != nil {
-		c.logger.Warn("failed to load cursor, starting from beginning", "error", err)
-	}
+	// Load cursor for resume.
+	cursor := c.progress.GetCursor()
 	if cursor != "" {
 		c.logger.Info("resuming crawl from cursor", "cursor", cursor)
 	}
@@ -172,10 +184,8 @@ func (c *Crawler) Run(ctx context.Context) error {
 			"cursor", cursor, "dids", pageTotal, "pds_count", len(pdsGroups))
 
 		// Filter already-completed DIDs.
-		filteredCount, err := c.progress.FilterPage(ctx, pdsGroups)
-		if err != nil {
-			c.logger.Warn("failed to filter page, proceeding without filtering", "error", err)
-		} else if filteredCount > 0 {
+		filteredCount := c.progress.FilterPage(pdsGroups)
+		if filteredCount > 0 {
 			c.logger.Info("filtered completed DIDs from page", "skipped", filteredCount)
 		}
 
@@ -201,7 +211,7 @@ func (c *Crawler) Run(ctx context.Context) error {
 		// Advance cursor.
 		if nextCursor != "" {
 			cursor = nextCursor
-			c.progress.SetCursor(ctx, cursor)
+			c.progress.SetCursor(cursor)
 		}
 
 		// End of data: last page was smaller than page size.
@@ -230,25 +240,35 @@ func (c *Crawler) Run(ctx context.Context) error {
 	// Signal workers to drain.
 	workerPool.Stop()
 
-	// Close repoQueue to signal writer to finish.
-	close(c.repoQueue)
-	c.wg.Wait()
+	if c.config.Direct {
+		// Close crawledQueue to signal CHWriter to finish.
+		close(c.crawledQueue)
+		c.wg.Wait()
 
-	// Finalize segment.
-	if err := c.writer.Close(); err != nil {
-		return fmt.Errorf("closing segment writer: %w", err)
+		c.progress.ClearCursor()
+
+		c.logger.Info("crawl complete",
+			"total_records", c.chWriter.Sent(),
+			"pages", totalPages)
+	} else {
+		// Close repoQueue to signal writer to finish.
+		close(c.repoQueue)
+		c.wg.Wait()
+
+		// Finalize segment.
+		if err := c.writer.Close(); err != nil {
+			return fmt.Errorf("closing segment writer: %w", err)
+		}
+
+		c.progress.SetSegmentNum(c.writer.SegmentNum())
+		c.progress.ClearCursor()
+
+		c.logger.Info("crawl complete",
+			"total_repos", c.writer.TotalRepos(),
+			"bytes_written", c.writer.BytesWritten(),
+			"segments", c.writer.SegmentNum(),
+			"pages", totalPages)
 	}
-
-	// Save final state and clear cursor on successful completion.
-	c.progress.SetSegmentNum(ctx, c.writer.SegmentNum())
-	c.progress.SaveStats(ctx, c.writer.TotalRepos(), c.writer.BytesWritten())
-	c.progress.ClearCursor(ctx)
-
-	c.logger.Info("crawl complete",
-		"total_repos", c.writer.TotalRepos(),
-		"bytes_written", c.writer.BytesWritten(),
-		"segments", c.writer.SegmentNum(),
-		"pages", totalPages)
 
 	return nil
 }
@@ -293,9 +313,12 @@ func (c *Crawler) writerLoop(ctx context.Context) {
 				lastSegment = currentSegment
 			}
 
-			c.progress.SetSegmentNum(ctx, currentSegment)
+			c.progress.SetSegmentNum(currentSegment)
 		case <-ticker.C:
-			c.progress.SaveStats(ctx, c.writer.TotalRepos(), c.writer.BytesWritten())
+			c.logger.Info("writer progress",
+				"total_repos", c.writer.TotalRepos(),
+				"bytes_written", c.writer.BytesWritten(),
+				"segment", c.writer.SegmentNum())
 		case <-ctx.Done():
 			// Drain remaining repos in the channel.
 			for sr := range c.repoQueue {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -11,8 +10,6 @@ import (
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
 	"github.com/jazware/bsky-experiments/telemetry"
 	"github.com/jazware/bsky-experiments/version"
-	"github.com/redis/go-redis/extra/redisotel/v9"
-	"github.com/redis/go-redis/v9"
 	"github.com/urfave/cli/v2"
 )
 
@@ -34,7 +31,6 @@ func main() {
 			createMVCommand(),
 			inspectCommand(),
 			tallyCommand(),
-			statusCommand(),
 			resetCommand(),
 		},
 	}
@@ -46,12 +42,6 @@ func main() {
 
 func commonFlags() []cli.Flag {
 	return []cli.Flag{
-		&cli.StringFlag{
-			Name:    "redis-address",
-			Usage:   "Redis address",
-			Value:   "localhost:6379",
-			EnvVars: []string{"REDIS_ADDRESS"},
-		},
 		&cli.StringFlag{
 			Name:    "clickhouse-address",
 			Usage:   "ClickHouse address",
@@ -71,22 +61,6 @@ func commonFlags() []cli.Flag {
 			EnvVars: []string{"CLICKHOUSE_PASSWORD"},
 		},
 	}
-}
-
-func setupRedis(ctx context.Context, cctx *cli.Context) (*redis.Client, error) {
-	client := redis.NewClient(&redis.Options{
-		Addr: cctx.String("redis-address"),
-	})
-	if err := redisotel.InstrumentTracing(client); err != nil {
-		return nil, fmt.Errorf("redis tracing: %w", err)
-	}
-	if err := redisotel.InstrumentMetrics(client); err != nil {
-		return nil, fmt.Errorf("redis metrics: %w", err)
-	}
-	if _, err := client.Ping(ctx).Result(); err != nil {
-		return nil, fmt.Errorf("redis ping: %w", err)
-	}
-	return client, nil
 }
 
 func setupClickHouse(cctx *cli.Context) (driver.Conn, error) {

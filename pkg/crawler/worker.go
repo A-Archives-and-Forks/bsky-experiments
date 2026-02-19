@@ -17,28 +17,31 @@ import (
 	"github.com/jazware/bsky-experiments/pkg/crawler/carrepo"
 	"github.com/jazware/bsky-experiments/pkg/repoarchive"
 	"github.com/klauspost/compress/zstd"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
 // WorkerPool manages a pool of crawl workers.
 type WorkerPool struct {
-	workQueue   chan *CrawlTask
-	repoQueue   chan *repoarchive.SerializedRepo
-	progress    *Progress
-	dispatcher  *Dispatcher
-	config      Config
-	logger      *slog.Logger
-	client      *http.Client
-	encoderPool sync.Pool
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
+	workQueue    chan *CrawlTask
+	repoQueue    chan *repoarchive.SerializedRepo
+	crawledQueue chan *repoarchive.CrawledRepo
+	progress     *Progress
+	dispatcher   *Dispatcher
+	config       Config
+	logger       *slog.Logger
+	client       *http.Client
+	encoderPool  sync.Pool
+	wg           sync.WaitGroup
+	cancel       context.CancelFunc
 }
 
 // NewWorkerPool creates and starts a pool of crawl workers.
 func NewWorkerPool(
 	numWorkers int,
 	repoQueue chan *repoarchive.SerializedRepo,
+	crawledQueue chan *repoarchive.CrawledRepo,
 	progress *Progress,
 	dispatcher *Dispatcher,
 	config Config,
@@ -47,14 +50,29 @@ func NewWorkerPool(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	wp := &WorkerPool{
-		workQueue:  make(chan *CrawlTask, 1000),
-		repoQueue:  repoQueue,
-		progress:   progress,
-		dispatcher: dispatcher,
-		config:     config,
-		logger:     logger,
+		workQueue:    make(chan *CrawlTask, 1000),
+		repoQueue:    repoQueue,
+		crawledQueue: crawledQueue,
+		progress:     progress,
+		dispatcher:   dispatcher,
+		config:       config,
+		logger:       logger,
 		client: &http.Client{
 			Timeout: 20 * time.Minute,
+			Transport: otelhttp.NewTransport(&http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          numWorkers + 10,
+				MaxIdleConnsPerHost:   numWorkers,
+				MaxConnsPerHost:       numWorkers,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+			}),
 		},
 		encoderPool: sync.Pool{
 			New: func() any {
@@ -130,24 +148,34 @@ func (wp *WorkerPool) processTask(ctx context.Context, logger *slog.Logger, task
 	repoRecords.Observe(float64(recordCount))
 	repoCollections.Observe(float64(collectionCount))
 
-	// Serialize + compress in this worker goroutine (parallelized across all workers).
-	enc := wp.encoderPool.Get().(*zstd.Encoder)
-	sr, err := repoarchive.SerializeRepoBlock(enc, crawled)
-	wp.encoderPool.Put(enc)
-	if err != nil {
-		logger.Error("failed to serialize repo", "did", task.DID, "error", err)
-		reposProcessedTotal.WithLabelValues("serialize_error").Inc()
-		return
-	}
+	if wp.config.Direct {
+		// Direct mode: send CrawledRepo straight to ClickHouse writer.
+		reposProcessedTotal.WithLabelValues("success").Inc()
+		select {
+		case wp.crawledQueue <- crawled:
+			wp.progress.MarkCompleted(task.DID)
+		case <-ctx.Done():
+			return
+		}
+	} else {
+		// Archive mode: serialize + compress, then send to segment writer.
+		enc := wp.encoderPool.Get().(*zstd.Encoder)
+		sr, err := repoarchive.SerializeRepoBlock(enc, crawled)
+		wp.encoderPool.Put(enc)
+		if err != nil {
+			logger.Error("failed to serialize repo", "did", task.DID, "error", err)
+			reposProcessedTotal.WithLabelValues("serialize_error").Inc()
+			return
+		}
 
-	reposProcessedTotal.WithLabelValues("success").Inc()
+		reposProcessedTotal.WithLabelValues("success").Inc()
 
-	// Send pre-compressed block to writer.
-	select {
-	case wp.repoQueue <- sr:
-		wp.progress.MarkCompleted(ctx, task.DID)
-	case <-ctx.Done():
-		return
+		select {
+		case wp.repoQueue <- sr:
+			wp.progress.MarkCompleted(task.DID)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
@@ -312,7 +340,7 @@ func (wp *WorkerPool) handleError(ctx context.Context, logger *slog.Logger, task
 	repoErr, ok := err.(*RepoError)
 	if !ok {
 		logger.Error("unexpected error", "did", task.DID, "pds", task.PDS, "error", err)
-		wp.progress.MarkFailed(ctx, task.DID, "unknown")
+		wp.progress.MarkFailed(task.DID, "unknown")
 		reposProcessedTotal.WithLabelValues("unknown").Inc()
 		wp.dispatcher.ReportResult(task.PDS, false)
 		return
@@ -329,16 +357,16 @@ func (wp *WorkerPool) handleError(ctx context.Context, logger *slog.Logger, task
 	case "not_found", "deactivated", "takendown":
 		// Permanent per-repo failures — skip.
 		logger.Debug("skipping repo", "did", task.DID, "reason", repoErr.Category)
-		wp.progress.MarkFailed(ctx, task.DID, repoErr.Category)
+		wp.progress.MarkFailed(task.DID, repoErr.Category)
 	case "parse_error":
 		logger.Warn("parse error", "did", task.DID, "error", repoErr.Err)
-		wp.progress.MarkFailed(ctx, task.DID, repoErr.Category)
+		wp.progress.MarkFailed(task.DID, repoErr.Category)
 	case "rate_limited":
 		logger.Warn("rate limited by PDS", "pds", task.PDS)
-		wp.progress.MarkFailed(ctx, task.DID, repoErr.Category)
+		wp.progress.MarkFailed(task.DID, repoErr.Category)
 	default:
 		// PDS-level errors: dns_error, unavailable, timeout, http_error, unknown
 		logger.Warn("crawl error", "did", task.DID, "pds", task.PDS, "category", repoErr.Category, "error", repoErr.Err)
-		wp.progress.MarkFailed(ctx, task.DID, repoErr.Category)
+		wp.progress.MarkFailed(task.DID, repoErr.Category)
 	}
 }
