@@ -13,23 +13,25 @@ import (
 // (no SHA256 hashing), MerkleSearchTree object allocation, and nodeEntry
 // intermediaries — directly walking decoded NodeData.
 func walkLeaves(blocks map[cid.Cid][]byte, root cid.Cid, cb func(key string, val cid.Cid) error) error {
-	return walkNode(blocks, root, cb)
+	var reader bytes.Reader
+	return walkNode(blocks, root, cb, &reader)
 }
 
-func walkNode(blocks map[cid.Cid][]byte, nodeCid cid.Cid, cb func(key string, val cid.Cid) error) error {
+func walkNode(blocks map[cid.Cid][]byte, nodeCid cid.Cid, cb func(key string, val cid.Cid) error, reader *bytes.Reader) error {
 	raw, ok := blocks[nodeCid]
 	if !ok {
 		return fmt.Errorf("missing MST node block: %s", nodeCid)
 	}
 
 	var nd mst.NodeData
-	if err := nd.UnmarshalCBOR(bytes.NewReader(raw)); err != nil {
+	reader.Reset(raw)
+	if err := nd.UnmarshalCBOR(reader); err != nil {
 		return fmt.Errorf("decoding MST node: %w", err)
 	}
 
 	// Recurse into left subtree first (smaller keys).
 	if nd.Left != nil {
-		if err := walkNode(blocks, *nd.Left, cb); err != nil {
+		if err := walkNode(blocks, *nd.Left, cb, reader); err != nil {
 			return err
 		}
 	}
@@ -48,7 +50,7 @@ func walkNode(blocks map[cid.Cid][]byte, nodeCid cid.Cid, cb func(key string, va
 
 		// Recurse into right subtree (keys between this entry and the next).
 		if e.Tree != nil {
-			if err := walkNode(blocks, *e.Tree, cb); err != nil {
+			if err := walkNode(blocks, *e.Tree, cb, reader); err != nil {
 				return err
 			}
 		}

@@ -248,7 +248,7 @@ func (wp *WorkerPool) fetchAndParseRepo(ctx context.Context, logger *slog.Logger
 	rev := r.Rev
 
 	// Iterate all records, group by collection, marshal to JSON, strip CIDs.
-	collections := make(map[string][]repoarchive.Record)
+	collections := make(map[string][]repoarchive.Record, 16)
 	recordCount := 0
 
 	err = r.ForEach(func(path string, raw []byte) error {

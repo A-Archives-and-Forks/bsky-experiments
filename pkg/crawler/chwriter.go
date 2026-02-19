@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jazware/bsky-experiments/pkg/repoarchive"
@@ -32,9 +34,9 @@ var (
 )
 
 const (
-	chBatchLimit     = 500_000
-	chFlushInterval  = 10 * time.Second
-	chLogInterval    = 30 * time.Second
+	chBatchLimit    = 500_000
+	chFlushInterval = 10 * time.Second
+	chLogInterval   = 30 * time.Second
 )
 
 // chBatch holds columnar arrays for a batch insert into crawl_records.
@@ -47,8 +49,30 @@ type chBatch struct {
 	timeUSs     []int64
 }
 
+var chBatchPool = sync.Pool{
+	New: func() any {
+		return &chBatch{
+			repos:       make([]string, 0, chBatchLimit),
+			collections: make([]string, 0, chBatchLimit),
+			rkeys:       make([]string, 0, chBatchLimit),
+			recordJSONs: make([]string, 0, chBatchLimit),
+			crawledAts:  make([]time.Time, 0, chBatchLimit),
+			timeUSs:     make([]int64, 0, chBatchLimit),
+		}
+	},
+}
+
 func (b *chBatch) len() int {
 	return len(b.repos)
+}
+
+func (b *chBatch) reset() {
+	b.repos = b.repos[:0]
+	b.collections = b.collections[:0]
+	b.rkeys = b.rkeys[:0]
+	b.recordJSONs = b.recordJSONs[:0]
+	b.crawledAts = b.crawledAts[:0]
+	b.timeUSs = b.timeUSs[:0]
 }
 
 func (b *chBatch) append(repo, collection, rkey, recordJSON string, crawledAt time.Time) {
@@ -87,7 +111,7 @@ func (w *CHWriter) Run(ctx context.Context) {
 
 	// Pipeline: accumulator fills batches, sender goroutine ships them.
 	// Buffer of 1 lets the next batch accumulate while the current one sends.
-	sendCh := make(chan chBatch, 1)
+	sendCh := make(chan *chBatch, 1)
 	sendDone := make(chan struct{})
 
 	go func() {
@@ -99,10 +123,12 @@ func (w *CHWriter) Run(ctx context.Context) {
 				}
 				return
 			}
+			b.reset()
+			chBatchPool.Put(b)
 		}
 	}()
 
-	current := chBatch{}
+	current := chBatchPool.Get().(*chBatch)
 	flushTicker := time.NewTicker(chFlushInterval)
 	defer flushTicker.Stop()
 	logTicker := time.NewTicker(chLogInterval)
@@ -118,7 +144,7 @@ func (w *CHWriter) Run(ctx context.Context) {
 		default:
 		}
 		sendCh <- current
-		current = chBatch{}
+		current = chBatchPool.Get().(*chBatch)
 	}
 
 	for {
@@ -130,7 +156,7 @@ func (w *CHWriter) Run(ctx context.Context) {
 				<-sendDone
 				return
 			}
-			w.flattenRepo(repo, &current)
+			w.flattenRepo(repo, current)
 			if current.len() >= chBatchLimit {
 				flush()
 			}
@@ -140,7 +166,7 @@ func (w *CHWriter) Run(ctx context.Context) {
 			w.logger.Info("chwriter progress", "sent", w.sent.Load())
 		case <-ctx.Done():
 			for repo := range w.input {
-				w.flattenRepo(repo, &current)
+				w.flattenRepo(repo, current)
 				if current.len() >= chBatchLimit {
 					flush()
 				}
@@ -167,12 +193,18 @@ func (w *CHWriter) Sent() int64 {
 func (w *CHWriter) flattenRepo(repo *repoarchive.CrawledRepo, b *chBatch) {
 	for collection, records := range repo.Collections {
 		for _, rec := range records {
-			b.append(repo.DID, collection, rec.RKey, string(rec.JSON), repo.CrawledAt)
+			b.append(repo.DID, collection, rec.RKey, bytesToString(rec.JSON), repo.CrawledAt)
 		}
 	}
 }
 
-func (w *CHWriter) sendBatch(ctx context.Context, b chBatch) error {
+// bytesToString converts a byte slice to a string without copying.
+// Safe when the byte slice will not be modified after conversion.
+func bytesToString(b []byte) string {
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
+func (w *CHWriter) sendBatch(ctx context.Context, b *chBatch) error {
 	if b.len() == 0 {
 		return nil
 	}

@@ -21,7 +21,7 @@ func ReadCAR(r io.Reader) (cid.Cid, map[cid.Cid][]byte, error) {
 		return cid.Undef, nil, fmt.Errorf("reading CAR header: %w", err)
 	}
 
-	blocks := make(map[cid.Cid][]byte)
+	blocks := make(map[cid.Cid][]byte, 256)
 	for {
 		blockLen, err := binary.ReadUvarint(br)
 		if err != nil {
