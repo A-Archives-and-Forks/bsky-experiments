@@ -24,7 +24,7 @@ func createMVCommand() *cli.Command {
 }
 
 func runCreateMV(cctx *cli.Context) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
 	signals := make(chan os.Signal, 1)
