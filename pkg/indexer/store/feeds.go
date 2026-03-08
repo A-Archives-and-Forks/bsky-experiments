@@ -152,10 +152,15 @@ func (s *Store) ListMPLS(ctx context.Context, cursor string, limit int) (posts [
 	defer func() { done(attribute.Int("result.count", len(posts))) }()
 
 	query := `
-		SELECT actor_did, rkey, created_at
-		FROM mpls
-		WHERE rkey < ?
-		ORDER BY rkey DESC
+		SELECT m.actor_did, m.rkey, m.created_at
+		FROM mpls AS m
+		INNER JOIN (
+			SELECT DISTINCT actor_did
+			FROM actor_labels FINAL
+			WHERE label = 'mpls' AND deleted = 0
+		) AS al ON m.actor_did = al.actor_did
+		WHERE m.rkey < ?
+		ORDER BY m.rkey DESC
 		LIMIT ?
 	`
 
@@ -187,10 +192,15 @@ func (s *Store) ListTQSP(ctx context.Context, cursor string, limit int) (posts [
 	defer func() { done(attribute.Int("result.count", len(posts))) }()
 
 	query := `
-		SELECT actor_did, rkey, created_at
-		FROM tqsp
-		WHERE rkey < ?
-		ORDER BY rkey DESC
+		SELECT m.actor_did, m.rkey, m.created_at
+		FROM tqsp AS m
+		INNER JOIN (
+			SELECT DISTINCT actor_did
+			FROM actor_labels FINAL
+			WHERE label = 'tqsp' AND deleted = 0
+		) AS al ON m.actor_did = al.actor_did
+		WHERE m.rkey < ?
+		ORDER BY m.rkey DESC
 		LIMIT ?
 	`
 
