@@ -142,25 +142,26 @@ type LabelPost struct {
 	ActorDID  string
 	Rkey      string
 	CreatedAt time.Time
+	IndexedAt time.Time
 }
 
 // ListMPLS retrieves posts from the mpls feed
-func (s *Store) ListMPLS(ctx context.Context, cursor string, limit int) (posts []LabelPost, err error) {
+func (s *Store) ListMPLS(ctx context.Context, cursor time.Time, limit int) (posts []LabelPost, err error) {
 	ctx, done := observe(ctx, "query", &err,
-		attribute.String("cursor", cursor),
+		attribute.String("cursor", cursor.Format(time.RFC3339Nano)),
 		attribute.Int("limit", limit))
 	defer func() { done(attribute.Int("result.count", len(posts))) }()
 
 	query := `
-		SELECT m.actor_did, m.rkey, m.created_at
+		SELECT m.actor_did, m.rkey, m.created_at, m.indexed_at
 		FROM mpls AS m
 		INNER JOIN (
 			SELECT DISTINCT actor_did
 			FROM actor_labels FINAL
 			WHERE label = 'mpls' AND deleted = 0
 		) AS al ON m.actor_did = al.actor_did
-		WHERE m.rkey < ?
-		ORDER BY m.rkey DESC
+		WHERE m.indexed_at < ?
+		ORDER BY m.indexed_at DESC
 		LIMIT ?
 	`
 
@@ -172,7 +173,7 @@ func (s *Store) ListMPLS(ctx context.Context, cursor string, limit int) (posts [
 
 	for rows.Next() {
 		var post LabelPost
-		if err := rows.Scan(&post.ActorDID, &post.Rkey, &post.CreatedAt); err != nil {
+		if err := rows.Scan(&post.ActorDID, &post.Rkey, &post.CreatedAt, &post.IndexedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 		posts = append(posts, post)

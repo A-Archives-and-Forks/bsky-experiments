@@ -3,6 +3,7 @@ package authorlabel
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/jazware/bsky-experiments/pkg/indexer/store"
@@ -126,11 +127,18 @@ func (f *Feed) GetMPLSPage(ctx context.Context, userDID string, limit int64, cur
 		return unauthorizedResponse, nil, nil
 	}
 
+	var cursorTime time.Time
 	if cursor == "" {
-		cursor = "~"
+		cursorTime = time.Now().Add(time.Hour)
+	} else {
+		var err error
+		cursorTime, err = time.Parse(time.RFC3339Nano, cursor)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid cursor: %w", err)
+		}
 	}
 
-	posts, err := f.Store.ListMPLS(ctx, cursor, int(limit))
+	posts, err := f.Store.ListMPLS(ctx, cursorTime, int(limit))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting posts from DB for feed (%s): %w", "mpls", err)
 	}
@@ -142,7 +150,7 @@ func (f *Feed) GetMPLSPage(ctx context.Context, userDID string, limit int64, cur
 		feedPosts = append(feedPosts, &appbsky.FeedDefs_SkeletonFeedPost{
 			Post: postAtURL,
 		})
-		newCursor = post.Rkey
+		newCursor = post.IndexedAt.Format(time.RFC3339Nano)
 	}
 
 	if int64(len(posts)) < limit {
